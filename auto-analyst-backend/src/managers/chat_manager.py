@@ -1,8 +1,7 @@
-
 from sqlalchemy import create_engine, desc, func, exists
 from sqlalchemy.orm import sessionmaker, scoped_session
 from sqlalchemy.exc import SQLAlchemyError
-from src.db.schemas.models import Base, User, Chat, Message, ModelUsage
+from src.db.schemas.models import Base, User, Chat, Message, ModelUsage, MessageFeedback
 import logging
 import requests
 import json
@@ -735,3 +734,246 @@ class ChatManager:
         except Exception as e:
             logger.log_message(f"Error in extract_response_history: {str(e)}", level=logging.ERROR)
             return ""  
+
+    def add_message_feedback(self, message_id: int, rating: int,
+                           model_settings: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """
+        Add or update feedback for a message.
+        
+        Args:
+            message_id: ID of the message to add feedback for
+            rating: Star rating (1-5)
+            model_settings: Optional dictionary containing model settings (name, provider, temperature, etc.)
+            
+        Returns:
+            Dictionary containing feedback information
+        """
+        session = self.Session()
+        try:
+            # Check if message exists
+            message = session.query(Message).filter(Message.message_id == message_id).first()
+            if not message:
+                raise ValueError(f"Message with ID {message_id} not found")
+            
+            # Check if feedback already exists
+            existing_feedback = session.query(MessageFeedback).filter(
+                MessageFeedback.message_id == message_id
+            ).first()
+            
+            now = datetime.utcnow()
+            
+            # Extract model settings
+            model_name = None
+            model_provider = None
+            temperature = None
+            max_tokens = None
+            
+            if model_settings:
+                model_name = model_settings.get('model_name')
+                model_provider = model_settings.get('model_provider')
+                temperature = model_settings.get('temperature')
+                max_tokens = model_settings.get('max_tokens')
+            
+            if existing_feedback:
+                # Update existing feedback
+                existing_feedback.rating = rating
+                existing_feedback.model_name = model_name
+                existing_feedback.model_provider = model_provider
+                existing_feedback.temperature = temperature
+                existing_feedback.max_tokens = max_tokens
+                existing_feedback.updated_at = now
+                feedback_record = existing_feedback
+            else:
+                # Create new feedback
+                feedback_record = MessageFeedback(
+                    message_id=message_id,
+                    rating=rating,
+                    model_name=model_name,
+                    model_provider=model_provider,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                    created_at=now,
+                    updated_at=now
+                )
+                session.add(feedback_record)
+            
+            session.commit()
+            
+            return {
+                "feedback_id": feedback_record.feedback_id,
+                "message_id": feedback_record.message_id,
+                "rating": feedback_record.rating,
+                "model_name": feedback_record.model_name,
+                "model_provider": feedback_record.model_provider,
+                "temperature": feedback_record.temperature,
+                "max_tokens": feedback_record.max_tokens,
+                "created_at": feedback_record.created_at.isoformat(),
+                "updated_at": feedback_record.updated_at.isoformat()
+            }
+        except SQLAlchemyError as e:
+            session.rollback()
+            logger.log_message(f"Error adding feedback: {str(e)}", level=logging.ERROR)
+            raise
+        finally:
+            session.close()
+    
+    def get_message_feedback(self, message_id: int) -> Optional[Dict[str, Any]]:
+        """
+        Get feedback for a specific message.
+        
+        Args:
+            message_id: ID of the message to get feedback for
+            
+        Returns:
+            Dictionary containing feedback information or None if no feedback exists
+        """
+        session = self.Session()
+        try:
+            feedback = session.query(MessageFeedback).filter(
+                MessageFeedback.message_id == message_id
+            ).first()
+            
+            if not feedback:
+                return None
+                
+            return {
+                "feedback_id": feedback.feedback_id,
+                "message_id": feedback.message_id,
+                "rating": feedback.rating,
+                "model_name": feedback.model_name,
+                "model_provider": feedback.model_provider,
+                "temperature": feedback.temperature,
+                "max_tokens": feedback.max_tokens,
+                "created_at": feedback.created_at.isoformat(),
+                "updated_at": feedback.updated_at.isoformat()
+            }
+        except SQLAlchemyError as e:
+            logger.log_message(f"Error getting feedback: {str(e)}", level=logging.ERROR)
+            raise
+        finally:
+            session.close()
+            
+    def get_chat_feedback(self, chat_id: int) -> List[Dict[str, Any]]:
+        """
+        Get all feedback for messages in a specific chat.
+        
+        Args:
+            chat_id: ID of the chat to get feedback for
+            
+        Returns:
+            List of dictionaries containing feedback information
+        """
+        session = self.Session()
+        try:
+            feedback_records = session.query(MessageFeedback).join(
+                Message, Message.message_id == MessageFeedback.message_id
+            ).filter(
+                Message.chat_id == chat_id
+            ).all()
+            
+            return [{
+                "feedback_id": feedback.feedback_id,
+                "message_id": feedback.message_id,
+                "rating": feedback.rating,
+                "model_name": feedback.model_name,
+                "model_provider": feedback.model_provider,
+                "temperature": feedback.temperature,
+                "max_tokens": feedback.max_tokens,
+                "created_at": feedback.created_at.isoformat(),
+                "updated_at": feedback.updated_at.isoformat()
+            } for feedback in feedback_records]
+        except SQLAlchemyError as e:
+            logger.log_message(f"Error getting chat feedback: {str(e)}", level=logging.ERROR)
+            raise
+        finally:
+            session.close()
+            
+    def get_feedback_statistics(self, user_id: Optional[int] = None, 
+                              start_date: Optional[datetime] = None,
+                              end_date: Optional[datetime] = None) -> Dict[str, Any]:
+        """
+        Get feedback statistics for analysis.
+        
+        Args:
+            user_id: Optional user ID to filter by
+            start_date: Optional start date to filter by
+            end_date: Optional end date to filter by
+            
+        Returns:
+            Dictionary containing feedback statistics
+        """
+        session = self.Session()
+        try:
+            # Base query for all feedback
+            query = session.query(MessageFeedback).join(
+                Message, Message.message_id == MessageFeedback.message_id
+            )
+            
+            # Apply filters if provided
+            if user_id is not None:
+                query = query.join(Chat, Chat.chat_id == Message.chat_id).filter(
+                    Chat.user_id == user_id
+                )
+                
+            if start_date is not None:
+                query = query.filter(MessageFeedback.created_at >= start_date)
+                
+            if end_date is not None:
+                query = query.filter(MessageFeedback.created_at <= end_date)
+            
+            # Get all feedback records
+            feedback_records = query.all()
+            
+            # Calculate statistics
+            if not feedback_records:
+                return {
+                    "total_feedback_count": 0,
+                    "average_rating": 0,
+                    "rating_distribution": {
+                        "1": 0, "2": 0, "3": 0, "4": 0, "5": 0
+                    },
+                    "model_ratings": {}
+                }
+            
+            # Calculate average rating
+            ratings = [record.rating for record in feedback_records if record.rating is not None]
+            average_rating = sum(ratings) / len(ratings) if ratings else 0
+            
+            # Calculate rating distribution
+            rating_distribution = {
+                "1": 0, "2": 0, "3": 0, "4": 0, "5": 0
+            }
+            
+            for record in feedback_records:
+                if record.rating is not None:
+                    rating_distribution[str(record.rating)] += 1
+                    
+            # Calculate ratings by model
+            model_ratings = {}
+            for record in feedback_records:
+                if record.model_name and record.rating is not None:
+                    if record.model_name not in model_ratings:
+                        model_ratings[record.model_name] = {
+                            "count": 0,
+                            "total": 0,
+                            "average": 0
+                        }
+                    
+                    model_ratings[record.model_name]["count"] += 1
+                    model_ratings[record.model_name]["total"] += record.rating
+            
+            # Calculate average for each model
+            for model_name, data in model_ratings.items():
+                data["average"] = data["total"] / data["count"] if data["count"] > 0 else 0
+            
+            return {
+                "total_feedback_count": len(feedback_records),
+                "average_rating": average_rating,
+                "rating_distribution": rating_distribution,
+                "model_ratings": model_ratings
+            }
+        except SQLAlchemyError as e:
+            logger.log_message(f"Error getting feedback statistics: {str(e)}", level=logging.ERROR)
+            raise
+        finally:
+            session.close()  

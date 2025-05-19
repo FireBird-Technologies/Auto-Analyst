@@ -1,4 +1,4 @@
-from sqlalchemy import create_engine, Column, Integer, String, ForeignKey, DateTime, Text, Float, Boolean
+from sqlalchemy import create_engine, Column, Integer, String, ForeignKey, DateTime, Text, Float, Boolean, JSON
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, relationship
 from datetime import datetime
@@ -42,6 +42,7 @@ class Message(Base):
     timestamp = Column(DateTime, default=datetime.utcnow)
     # Add relationship for cascade options
     chat = relationship("Chat", back_populates="messages")
+    feedback = relationship("MessageFeedback", back_populates="message", uselist=False, cascade="all, delete-orphan")
 
 # Define the Model Usage table
 class ModelUsage(Base):
@@ -97,5 +98,28 @@ class CodeExecution(Base):
     # Metadata
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+class MessageFeedback(Base):
+    """Tracks user feedback and model settings for each message."""
+    __tablename__ = 'message_feedback'
+    
+    feedback_id = Column(Integer, primary_key=True, autoincrement=True)
+    message_id = Column(Integer, ForeignKey('messages.message_id', ondelete="CASCADE"), nullable=False)
+    
+    # User feedback
+    rating = Column(Integer, nullable=True)  # Star rating (1-5)
+    
+    # Model settings used for this message
+    model_name = Column(String(100), nullable=True)
+    model_provider = Column(String(50), nullable=True)
+    temperature = Column(Float, nullable=True)
+    max_tokens = Column(Integer, nullable=True)
+
+    # Metadata
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    # Relationship
+    message = relationship("Message", back_populates="feedback")
     
     

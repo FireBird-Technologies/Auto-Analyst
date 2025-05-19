@@ -4,36 +4,58 @@ import React, { useCallback, useState } from "react"
 import ReactMarkdown from "react-markdown"
 import rehypeRaw from "rehype-raw"
 import remarkGfm from "remark-gfm"
-import { AlertTriangle, WrenchIcon } from "lucide-react"
+import { AlertTriangle, WrenchIcon, Copy, Download, Check } from "lucide-react"
 import CodeFixButton from "./CodeFixButton"
+import MessageFeedback from "./MessageFeedback"
 import { useSessionStore } from '@/lib/store/sessionStore'
 import { useToast } from "@/components/ui/use-toast"
 import { Button } from "@/components/ui/button"
 import { motion } from "framer-motion"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
+import { createDownloadHandler } from "@/lib/utils/exportUtils"
 
 interface MessageContentProps {
   message: string
+  fullMessage?: string  // The complete message for copying/downloading
   onCodeExecute?: (result: any, updateCodeBlock: (code: string) => void) => void
   agentName?: string
   codeFixes?: Record<string, number>
   setCodeFixes?: React.Dispatch<React.SetStateAction<Record<string, number>>>
   onOpenCanvas?: (errorMessage: string, codeId: string) => void
   isFixingError?: boolean
+  isAIMessage?: boolean
+  messageId?: number
+  chatId?: number
+  isLastPart?: boolean
 }
 
 const MessageContent: React.FC<MessageContentProps> = ({ 
   message, 
+  fullMessage,
   onCodeExecute, 
   agentName,
   codeFixes = {},
   setCodeFixes,
   onOpenCanvas,
-  isFixingError = false
+  isFixingError = false,
+  isAIMessage = false,
+  messageId,
+  chatId,
+  isLastPart = true
 }) => {
   const { sessionId } = useSessionStore()
   const { toast } = useToast()
   const [isFixingCode, setIsFixingCode] = useState<Record<string, boolean>>({})
   const [hovered, setHovered] = useState<Record<string, boolean>>({})
+  const [isCopied, setIsCopied] = useState(false)
+  
+  // Use fullMessage for copying/downloading if provided, otherwise fall back to message
+  const contentToCopy = fullMessage || message
   
   // Generate a unique code ID for each error block
   const generateCodeId = (content: string, index: number) => {
@@ -93,6 +115,29 @@ const MessageContent: React.FC<MessageContentProps> = ({
     // Reset fixing state
     setIsFixingCode(prev => ({ ...prev, [codeId]: false }))
   }, [setCodeFixes, toast])
+
+  // Copy message content to clipboard
+  const handleCopyToClipboard = useCallback(() => {
+    navigator.clipboard.writeText(contentToCopy).then(() => {
+      setIsCopied(true)
+      toast({
+        title: "Copied to clipboard",
+        description: "Message content has been copied to your clipboard.",
+        duration: 2000,
+      })
+      setTimeout(() => setIsCopied(false), 2000)
+    }).catch(err => {
+      toast({
+        title: "Failed to copy",
+        description: "Could not copy to clipboard. Please try again.",
+        variant: "destructive",
+        duration: 3000,
+      })
+    })
+  }, [contentToCopy, toast])
+
+  // Use the new download handler from exportUtils
+  const handleDownload = useCallback(createDownloadHandler(contentToCopy), [contentToCopy])
 
   // Custom fix button component for inline use
   const InlineFixButton = useCallback(({ codeId, errorContent }: { codeId: string, errorContent: string }) => {
@@ -281,7 +326,101 @@ const MessageContent: React.FC<MessageContentProps> = ({
     [codeFixes, handleCreditCheck, handleFixComplete, handleFixStart, isFixingCode, sessionId, setCodeFixes, toast, onOpenCanvas, InlineFixButton],
   )
 
-  return <>{renderContent(message)}</>
+  // Render action buttons only if this is an AI message and it's the last part
+  const showActionButtons = isAIMessage && isLastPart;
+
+  // Render feedback only if this is an AI message and it's the last part of the message
+  // and we have necessary IDs for the API calls
+  const showFeedback = isAIMessage && isLastPart;
+
+  return (
+    <div>
+      {renderContent(message)}
+      
+      {showFeedback && (
+        <div className="mt-4 pt-2 border-t border-gray-100">
+          <div className="bg-gray-50 p-2 rounded-md flex justify-between items-center">
+            <MessageFeedback messageId={messageId || 0} chatId={chatId || 0} />
+            
+            {showActionButtons && (
+              <div className="flex items-center space-x-2">
+                <Button 
+                  variant="ghost" 
+                  size="sm" 
+                  onClick={handleCopyToClipboard} 
+                  className="text-gray-500 hover:text-gray-700"
+                  title="Copy to clipboard"
+                >
+                  {isCopied ? <Check size={16} /> : <Copy size={16} />}
+                </Button>
+                
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button 
+                      variant="ghost" 
+                      size="sm" 
+                      className="text-gray-500 hover:text-gray-700"
+                      title="Download content"
+                    >
+                      <Download size={16} />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end">
+                    <DropdownMenuItem onClick={() => handleDownload('md')}>
+                      Download as Markdown
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => handleDownload('html')}>
+                      Download as HTML
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+      
+      {/* Show buttons outside of feedback section if no feedback is shown */}
+      {showActionButtons && !showFeedback && (
+        <div className="mt-4 pt-2 border-t border-gray-100">
+          <div className="bg-gray-50 p-2 rounded-md flex justify-end items-center">
+            <div className="flex items-center space-x-2">
+              <Button 
+                variant="ghost" 
+                size="sm" 
+                onClick={handleCopyToClipboard} 
+                className="text-gray-500 hover:text-gray-700"
+                title="Copy to clipboard"
+              >
+                {isCopied ? <Check size={16} /> : <Copy size={16} />}
+              </Button>
+              
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button 
+                    variant="ghost" 
+                    size="sm" 
+                    className="text-gray-500 hover:text-gray-700"
+                    title="Download content"
+                  >
+                    <Download size={16} />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuItem onClick={() => handleDownload('md')}>
+                    Download as Markdown
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => handleDownload('html')}>
+                    Download as HTML
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  )
 }
 
 export default React.memo(MessageContent)

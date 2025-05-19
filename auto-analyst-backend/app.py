@@ -37,6 +37,7 @@ from src.managers.session_manager import SessionManager
 from src.routes.analytics_routes import router as analytics_router
 from src.routes.chat_routes import router as chat_router
 from src.routes.code_routes import router as code_router
+from src.routes.feedback_routes import router as feedback_router
 from src.routes.session_routes import router as session_router, get_session_id_dependency
 from src.schemas.query_schemas import QueryRequest
 from src.utils.logger import Logger
@@ -856,6 +857,7 @@ app.include_router(chat_router)
 app.include_router(analytics_router)
 app.include_router(code_router)
 app.include_router(session_router)
+app.include_router(feedback_router)
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)

@@ -13,7 +13,7 @@ from sqlalchemy import case, desc, func
 from sqlalchemy.orm import Session
 
 from src.db.init_db import get_db, get_session
-from src.db.schemas.models import ModelUsage, CodeExecution
+from src.db.schemas.models import ModelUsage, CodeExecution, Message, MessageFeedback
 from src.managers.chat_manager import ChatManager
 
 from typing import Any, Dict, List, Optional
@@ -616,7 +616,7 @@ async def get_daily_costs(
             "cost": float(day.cost or 0),
             "tokens": int(day.tokens or 0)
         }
-        for day in daily_query
+        for day in daily_costs
     ]
     
     # Fill in any missing dates with zeros
@@ -1402,3 +1402,206 @@ def categorize_error(error_message):
         return "TimeoutError"
     else:
         return "OtherError"
+
+@router.get("/feedback/summary")
+async def get_feedback_summary(
+    period: str = "30d",
+    db: Session = Depends(get_db),
+    api_key: str = Depends(verify_admin_api_key)
+):
+    """
+    Get summary statistics about user feedback ratings.
+    """
+    logger.log_message(f"Feedback summary requested for period: {period}", logging.INFO)
+    start_date, end_date = get_date_range(period)
+    
+    # Get overall feedback statistics
+    overall_stats = db.query(
+        func.count().label("total_feedback"),
+        func.avg(MessageFeedback.rating).label("avg_rating"),
+        func.count(func.distinct(Message.chat_id)).label("chats_with_feedback")
+    ).join(
+        Message, MessageFeedback.message_id == Message.message_id
+    ).filter(
+        MessageFeedback.created_at.between(start_date, end_date),
+        MessageFeedback.rating.isnot(None)
+    ).first()
+
+    # Get feedback counts by rating
+    rating_counts = db.query(
+        MessageFeedback.rating,
+        func.count().label("count")
+    ).filter(
+        MessageFeedback.created_at.between(start_date, end_date),
+        MessageFeedback.rating.isnot(None)
+    ).group_by(
+        MessageFeedback.rating
+    ).all()
+    
+    # Convert to dictionary for easier access
+    ratings_dict = {rating.rating: rating.count for rating in rating_counts}
+    
+    # Ensure all ratings (1-5) are represented
+    ratings_distribution = [
+        {"rating": i, "count": ratings_dict.get(i, 0)} 
+        for i in range(1, 6)
+    ]
+    
+    # Get feedback by model
+    model_feedback = db.query(
+        MessageFeedback.model_name,
+        func.count().label("total_feedback"),
+        func.avg(MessageFeedback.rating).label("avg_rating")
+    ).filter(
+        MessageFeedback.created_at.between(start_date, end_date),
+        MessageFeedback.rating.isnot(None),
+        MessageFeedback.model_name.isnot(None)
+    ).group_by(
+        MessageFeedback.model_name
+    ).order_by(
+        desc(func.avg(MessageFeedback.rating))
+    ).all()
+    
+    # Process model feedback
+    models_data = [
+        {
+            "model_name": model.model_name,
+            "total_feedback": model.total_feedback,
+            "avg_rating": float(model.avg_rating) if model.avg_rating else 0
+        }
+        for model in model_feedback
+    ]
+    
+    # Get feedback trend over time
+    daily_feedback = db.query(
+        func.date(MessageFeedback.created_at).label("date"),
+        func.avg(MessageFeedback.rating).label("avg_rating"),
+        func.count().label("count")
+    ).filter(
+        MessageFeedback.created_at.between(start_date, end_date),
+        MessageFeedback.rating.isnot(None)
+    ).group_by(
+        func.date(MessageFeedback.created_at)
+    ).order_by(
+        func.date(MessageFeedback.created_at)
+    ).all()
+    
+    # Process daily feedback
+    feedback_trend = [
+        {
+            "date": str(day.date),
+            "avg_rating": float(day.avg_rating) if day.avg_rating else 0,
+            "count": day.count
+        }
+        for day in daily_feedback
+    ]
+    
+    # Fill in any missing dates with null values
+    date_range = [(start_date + timedelta(days=i)).strftime('%Y-%m-%d') 
+                 for i in range((end_date - start_date).days + 1)]
+    
+    feedback_dict = {item["date"]: item for item in feedback_trend}
+    
+    filled_trend = []
+    for date in date_range:
+        if date in feedback_dict:
+            filled_trend.append(feedback_dict[date])
+        else:
+            filled_trend.append({
+                "date": date,
+                "avg_rating": None,
+                "count": 0
+            })
+    
+    logger.log_message(f"Feedback summary retrieved with {overall_stats.total_feedback or 0} ratings", logging.INFO)
+    return {
+        "period": period,
+        "start_date": start_date.strftime('%Y-%m-%d'),
+        "end_date": end_date.strftime('%Y-%m-%d'),
+        "total_feedback": overall_stats.total_feedback or 0,
+        "avg_rating": float(overall_stats.avg_rating) if overall_stats.avg_rating else 0,
+        "chats_with_feedback": overall_stats.chats_with_feedback or 0,
+        "ratings_distribution": ratings_distribution,
+        "models_data": models_data,
+        "feedback_trend": filled_trend
+    }
+
+@router.get("/feedback/detailed")
+async def get_detailed_feedback(
+    period: str = "30d",
+    min_rating: Optional[int] = None,
+    max_rating: Optional[int] = None,
+    model_name: Optional[str] = None,
+    limit: int = 100,
+    offset: int = 0,
+    db: Session = Depends(get_db),
+    api_key: str = Depends(verify_admin_api_key)
+):
+    """
+    Get detailed feedback records with filtering options
+    """
+    logger.log_message(f"Detailed feedback requested for period: {period}", logging.INFO)
+    start_date, end_date = get_date_range(period)
+    
+    # Build query with joins to get message content
+    query = db.query(
+        MessageFeedback,
+        Message.content.label("message_content"),
+        Message.sender.label("message_sender"),
+        Message.chat_id.label("chat_id")
+    ).join(
+        Message, MessageFeedback.message_id == Message.message_id
+    ).filter(
+        MessageFeedback.created_at.between(start_date, end_date),
+        MessageFeedback.rating.isnot(None)
+    )
+    
+    # Apply optional filters
+    if min_rating is not None:
+        query = query.filter(MessageFeedback.rating >= min_rating)
+    
+    if max_rating is not None:
+        query = query.filter(MessageFeedback.rating <= max_rating)
+    
+    if model_name:
+        query = query.filter(MessageFeedback.model_name == model_name)
+    
+    # Get count for pagination before adding limit/offset
+    total_count = query.count()
+    
+    # Apply pagination
+    query = query.order_by(desc(MessageFeedback.created_at)).offset(offset).limit(limit)
+    
+    # Execute query
+    results = query.all()
+    
+    # Process results
+    detailed_feedback = []
+    for result in results:
+        feedback = result.MessageFeedback
+        
+        detailed_feedback.append({
+            "feedback_id": feedback.feedback_id,
+            "message_id": feedback.message_id,
+            "chat_id": result.chat_id,
+            "rating": feedback.rating,
+            "model_name": feedback.model_name,
+            "model_provider": feedback.model_provider,
+            "temperature": feedback.temperature,
+            "max_tokens": feedback.max_tokens,
+            "created_at": feedback.created_at.isoformat() if feedback.created_at else None,
+            "message_preview": result.message_content[:200] + "..." if len(result.message_content) > 200 else result.message_content,
+            "message_sender": result.message_sender
+        })
+    
+    logger.log_message(f"Retrieved {len(detailed_feedback)} detailed feedback records", logging.INFO)
+    return {
+        "period": period,
+        "start_date": start_date.strftime('%Y-%m-%d'),
+        "end_date": end_date.strftime('%Y-%m-%d'),
+        "total": total_count,
+        "count": len(detailed_feedback),
+        "offset": offset,
+        "limit": limit,
+        "feedback": detailed_feedback
+    }

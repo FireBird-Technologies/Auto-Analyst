@@ -855,12 +855,17 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ messages, isLoading, onSendMess
                       } else if (plotlyPart.trim()) {
                         return <MessageContent 
                           key={`${index}-${partIndex}-${plotlyIndex}`} 
-                          message={plotlyPart} 
+                          message={plotlyPart}
+                          fullMessage={typeof message.text === 'string' ? message.text : ''}
                           onCodeExecute={handleCodeExecute}
                           codeFixes={codeFixes}
                           setCodeFixes={setCodeFixes}
                           onOpenCanvas={handleOpenCanvasForFix}
                           isFixingError={codeFixState.isFixing}
+                          isAIMessage={message.sender === "ai"}
+                          messageId={message.message_id}
+                          chatId={message.chat_id}
+                          isLastPart={partIndex === messageContent.length - 1 && plotlyIndex === plotlyParts.length - 1}
                         />;
                       }
                       return null;
@@ -869,12 +874,17 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ messages, isLoading, onSendMess
                   // Regular text part
                   return <MessageContent 
                     key={`${index}-${partIndex}`} 
-                    message={part} 
+                    message={part}
+                    fullMessage={typeof message.text === 'string' ? message.text : ''}
                     onCodeExecute={handleCodeExecute}
                     codeFixes={codeFixes}
                     setCodeFixes={setCodeFixes}
                     onOpenCanvas={handleOpenCanvasForFix}
                     isFixingError={codeFixState.isFixing}
+                    isAIMessage={message.sender === "ai"}
+                    messageId={message.message_id}
+                    chatId={message.chat_id}
+                    isLastPart={partIndex === messageContent.length - 1}
                   />;
                 } else if (part.type === 'code') {
                   // Code indicator
@@ -911,12 +921,17 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ messages, isLoading, onSendMess
             ) : (
               // Fallback for non-array content
               <MessageContent 
-                message={typeof messageContent === 'string' ? messageContent : JSON.stringify(messageContent)} 
+                message={typeof messageContent === 'string' ? messageContent : JSON.stringify(messageContent)}
+                fullMessage={typeof message.text === 'string' ? message.text : JSON.stringify(message.text)}
                 onCodeExecute={handleCodeExecute}
                 codeFixes={codeFixes}
                 setCodeFixes={setCodeFixes}
                 onOpenCanvas={handleOpenCanvasForFix}
                 isFixingError={codeFixState.isFixing}
+                isAIMessage={message.sender === "ai"}
+                messageId={message.message_id}
+                chatId={message.chat_id}
+                isLastPart={true}
               />
             )}
           </div>
