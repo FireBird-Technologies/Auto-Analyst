@@ -121,40 +121,4 @@ class MessageFeedback(Base):
     
     # Relationship
     message = relationship("Message", back_populates="feedback")
-    
-class DatasetUpload(Base):
-    """Tracks dataset uploads, their status, and any errors encountered."""
-    __tablename__ = 'dataset_uploads'
-    
-    upload_id = Column(Integer, primary_key=True, autoincrement=True)
-    user_id = Column(Integer, ForeignKey('users.user_id', ondelete="SET NULL"), nullable=True)
-    
-    # Dataset metadata
-    filename = Column(String(255), nullable=False)
-    file_size = Column(Integer, nullable=False)  # Size in bytes
-    file_type = Column(String(50), nullable=False)  # e.g., 'csv', 'json', 'excel'
-    original_filename = Column(String(255), nullable=False)
-    
-    # Dataset characteristics
-    row_count = Column(Integer, nullable=True)
-    column_count = Column(Integer, nullable=True)
-    column_names = Column(JSON, nullable=True)  # Store column names as JSON array
-    data_types = Column(JSON, nullable=True)  # Store data types as JSON object
-    
-    # Upload status and tracking
-    status = Column(String(50), nullable=False, default='pending')  # pending, processing, completed, failed
-    error_message = Column(Text, nullable=True)
-    error_details = Column(JSON, nullable=True)  # Detailed error information as JSON
-    
-    # Processing metrics
-    processing_time_ms = Column(Integer, nullable=True)  # Time taken to process the dataset
-    validation_errors = Column(JSON, nullable=True)  # Store validation errors as JSON
-    
-    # Metadata
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-    
-    # Relationships
-    user = relationship("User", backref="dataset_uploads")
-    
-    
+ 
