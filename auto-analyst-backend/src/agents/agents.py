@@ -735,6 +735,10 @@ class planner_module(dspy.Module):
         #         "plan": "Something went wrong it is 0" + str(plan),
         #         "plan_instructions": {"message": "the plan was not constructed" + str(Agent_desc)}   
         #         }
+
+
+
+        
         # If plan or plan.plan is not available, return an error response
         if not plan or not hasattr(plan, 'plan'):
             logger.log_message("Planner did not return a valid plan object or 'plan' attribute is missing", level=logging.ERROR)
@@ -2005,7 +2009,11 @@ class auto_analyst(dspy.Module):
             yield 'basic_qa_agent', inputs, response 
             return 
 
-        plan_list = [agent.strip() for agent in plan_text.split("->") if agent.strip()]
+        plan_list = []
+        for agent in [a.strip() for a in plan_text.split("->") if a.strip()]:
+            if not agent.startswith("planner_"):
+                agent = "planner_" + agent
+            plan_list.append(agent)
 
         
 

@@ -60,18 +60,7 @@ export default function CheckoutPage() {
         price: 0.75,
         priceId: process.env.NEXT_PUBLIC_STRIPE_DAILY_PRICE_ID,
       },
-    },
-    {
-      name: 'Pro',
-      monthly: {
-        price: 29,
-        priceId: process.env.NEXT_PUBLIC_STRIPE_PRO_PRICE_ID,
-      },
-      yearly: {
-        price: 244,
-        priceId: process.env.NEXT_PUBLIC_STRIPE_PRO_YEARLY_PRICE_ID,
-      },
-    },
+    }
   ]
 
   // Function to update plan details when billing cycle changes
