@@ -81,8 +81,8 @@ const MessageFeedback = ({ messageId, chatId }: MessageFeedbackProps) => {
         const userSettings = JSON.parse(userModelSettingsStr)
         
         const settings: ModelSettings = {
-          model_name: userSettings.model || process.env.DEFAULT_PUBLIC_MODEL || 'gpt-4',
-          model_provider: userSettings.provider || process.env.DEFAULT_MODEL_PROVIDER || 'openai',
+          model_name: userSettings.model || process.env.DEFAULT_PUBLIC_MODEL || 'claude-opus-4-5-20251101',
+          model_provider: userSettings.provider || process.env.DEFAULT_MODEL_PROVIDER || 'anthropic',
           temperature: userSettings.temperature ?? 0.7,
           max_tokens: userSettings.maxTokens ?? 6000
         }
@@ -91,8 +91,8 @@ const MessageFeedback = ({ messageId, chatId }: MessageFeedbackProps) => {
       } else {
         // Fallback to environment defaults
         const settings: ModelSettings = {
-          model_name: process.env.DEFAULT_PUBLIC_MODEL || 'gpt-4',
-          model_provider: process.env.DEFAULT_MODEL_PROVIDER || 'openai',
+          model_name: process.env.DEFAULT_PUBLIC_MODEL || 'claude-opus-4-5-20251101',
+          model_provider: process.env.DEFAULT_MODEL_PROVIDER || 'anthropic',
           temperature: parseFloat(process.env.DEFAULT_TEMPERATURE || '0.7'),
           max_tokens: parseInt(process.env.PUBLIC_DEFAULT_MAX_TOKENS || '6000')
         }

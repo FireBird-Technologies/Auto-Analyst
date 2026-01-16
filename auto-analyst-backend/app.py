@@ -152,9 +152,9 @@ styling_instructions = [
 
 # Add near the top of the file, after imports
 DEFAULT_MODEL_CONFIG = {
-    "provider": os.getenv("MODEL_PROVIDER", "openai"),
-    "model": os.getenv("MODEL_NAME", "gpt-5-mini"),
-    "api_key": os.getenv("OPENAI_API_KEY"),
+    "provider": os.getenv("MODEL_PROVIDER", "anthropic"),
+    "model": os.getenv("MODEL_NAME", "claude-opus-4-5-20251101"),
+    "api_key": os.getenv("ANTHROPIC_API_KEY"),
     "temperature": float(os.getenv("TEMPERATURE", 1.0)),
     "max_tokens": int(os.getenv("MAX_TOKENS", 6000)), "cache": False
 }
@@ -1064,10 +1064,10 @@ def _get_model_name_for_provider(provider: str) -> str:
     """Get the model name for a provider"""
     provider_model_map = {
         "openai": "o3-mini",
-        "anthropic": "claude-3-7-sonnet-latest",
-        "gemini": "gemini-2.5-pro-preview-03-25"
+        "anthropic": "claude-opus-4-5-20251101",
+        "gemini": "gemini-3-pro"
     }
-    return provider_model_map.get(provider, "o3-mini")
+    return provider_model_map.get(provider, "claude-opus-4-5-20251101")
 
 
 

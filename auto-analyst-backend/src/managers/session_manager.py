@@ -135,9 +135,9 @@ This dataset appears clean with consistent formatting and no missing values, mak
             default_model_config = self._app_model_config
         else:
             default_model_config = {
-                "provider": os.getenv("MODEL_PROVIDER", "openai"),
-                "model": os.getenv("MODEL_NAME", "gpt-4o-mini"),
-                "api_key": os.getenv("OPENAI_API_KEY"),
+                "provider": os.getenv("MODEL_PROVIDER", "anthropic"),
+                "model": os.getenv("MODEL_NAME", "claude-opus-4-5-20251101"),
+                "api_key": os.getenv("ANTHROPIC_API_KEY"),
                 "temperature": float(os.getenv("TEMPERATURE", 1.0)),
                 "max_tokens": int(os.getenv("MAX_TOKENS", 6000))
             }
@@ -218,9 +218,9 @@ This dataset appears clean with consistent formatting and no missing values, mak
             
             # Get default model config for new sessions
             default_model_config = {
-                "provider": os.getenv("MODEL_PROVIDER", "openai"),
-                "model": os.getenv("MODEL_NAME", "gpt-4o-mini"),
-                "api_key": os.getenv("OPENAI_API_KEY"),
+                "provider": os.getenv("MODEL_PROVIDER", "anthropic"),
+                "model": os.getenv("MODEL_NAME", "claude-opus-4-5-20251101"),
+                "api_key": os.getenv("ANTHROPIC_API_KEY"),
                 "temperature": float(os.getenv("TEMPERATURE", 1.0)),
                 "max_tokens": int(os.getenv("MAX_TOKENS", 6000))
             }
@@ -265,9 +265,9 @@ This dataset appears clean with consistent formatting and no missing values, mak
         try:
             # Get default model config from environment
             default_model_config = {
-                "provider": os.getenv("MODEL_PROVIDER", "openai"),
-                "model": os.getenv("MODEL_NAME", "gpt-4o-mini"),
-                "api_key": os.getenv("OPENAI_API_KEY"),
+                "provider": os.getenv("MODEL_PROVIDER", "anthropic"),
+                "model": os.getenv("MODEL_NAME", "claude-opus-4-5-20251101"),
+                "api_key": os.getenv("ANTHROPIC_API_KEY"),
                 "temperature": float(os.getenv("TEMPERATURE", 1.0)),
                 "max_tokens": int(os.getenv("MAX_TOKENS", 6000))
             }

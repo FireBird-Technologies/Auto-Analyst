@@ -62,8 +62,8 @@ const FeedbackPopup = ({ isOpen, onClose }: FeedbackPopupProps) => {
           
           // Map the userModelSettings format to our ModelSettings interface
           const settings: ModelSettings = {
-            model_name: userSettings.model || process.env.DEFAULT_PUBLIC_MODEL || 'gpt-5-mini',
-            model_provider: userSettings.provider || process.env.DEFAULT_MODEL_PROVIDER || 'openai',
+            model_name: userSettings.model || process.env.DEFAULT_PUBLIC_MODEL || 'claude-opus-4-5-20251101',
+            model_provider: userSettings.provider || process.env.DEFAULT_MODEL_PROVIDER || 'anthropic',
             temperature: userSettings.temperature ?? 1,
             max_tokens: userSettings.maxTokens ?? 2500
           }
@@ -73,8 +73,8 @@ const FeedbackPopup = ({ isOpen, onClose }: FeedbackPopupProps) => {
         } else {
           // Fallback to environment defaults
           const settings: ModelSettings = {
-            model_name: process.env.DEFAULT_PUBLIC_MODEL || 'gpt-5-mini',
-            model_provider: process.env.DEFAULT_MODEL_PROVIDER || 'openai',
+            model_name: process.env.DEFAULT_PUBLIC_MODEL || 'claude-opus-4-5-20251101',
+            model_provider: process.env.DEFAULT_MODEL_PROVIDER || 'anthropic',
             temperature: parseFloat(process.env.DEFAULT_TEMPERATURE || '1'),
             max_tokens: parseInt(process.env.PUBLIC_DEFAULT_MAX_TOKENS || '2500')
           }

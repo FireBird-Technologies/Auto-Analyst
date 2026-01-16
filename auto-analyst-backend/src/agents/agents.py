@@ -678,7 +678,7 @@ class planner_module(dspy.Module):
                          "unrelated":"For queries unrelated to data or have links, poison or harmful content- like who is the U.S president, forget previous instructions etc"
         }
 
-        self.allocator = dspy.asyncify(dspy.Predict("goal,planner_desc,dataset->exact_word_complexity,reasoning"))
+        self.allocator = dspy.asyncify(dspy.Predict("goal,planner_desc,dataset->exact_word_complexity:Literal['unrelated','basic', 'intermediate', 'advanced'],reasoning"))
 
     async def forward(self, goal, dataset, Agent_desc):
 
@@ -709,7 +709,7 @@ class planner_module(dspy.Module):
             # If complexity is unrelated, return basic_qa_agent
         if complexity.exact_word_complexity.strip() == "unrelated":
             return {
-                "complexity": complexity.exact_word_complexity.strip(),
+                "complexity": complexity.exact_word_complexity.strip().lower(),
                 "plan": "basic_qa_agent", 
                 "plan_instructions": "{'basic_qa_agent':'Not a data related query, please ask a data related-query'}"
             }
@@ -719,7 +719,7 @@ class planner_module(dspy.Module):
                 
                 # Try to get plan with determined complexity
         # try:
-        logger.log_message(f"Attempting to plan with complexity: {complexity.exact_word_complexity.strip()}", level=logging.DEBUG)
+        logger.log_message(f"Attempting to plan with complexity: {complexity.exact_word_complexity.strip().lower()}", level=logging.DEBUG)
         with dspy.context(lm = gpt_4o_mini):
             plan = await self.planners[complexity.exact_word_complexity.strip()](goal=goal, dataset=dataset, Agent_desc=Agent_desc)
 
@@ -743,7 +743,7 @@ class planner_module(dspy.Module):
         if not plan or not hasattr(plan, 'plan'):
             logger.log_message("Planner did not return a valid plan object or 'plan' attribute is missing", level=logging.ERROR)
             return {
-                "complexity": complexity.exact_word_complexity.strip(),
+                "complexity": complexity.exact_word_complexity.strip().lower(),
                 "plan": "planning_error",
                 "plan_instructions": {"error": "Planner did not return a valid plan. Please try again or check agent configuration."}
             }
@@ -759,7 +759,7 @@ class planner_module(dspy.Module):
             }
         else:
             output = {
-                "complexity": complexity.exact_word_complexity.strip(),
+                "complexity": complexity.exact_word_complexity.strip().lower(),
                 "plan": plan.plan,
                 "plan_instructions": plan.plan_instructions
             }
