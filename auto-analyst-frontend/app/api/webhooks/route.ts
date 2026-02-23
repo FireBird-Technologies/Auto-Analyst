@@ -106,9 +106,9 @@ export async function POST(request: NextRequest) {
             
         // Always sync the status with Stripe, but handle special cases
         const updateData: any = {
-          status: subscription.status,
-              lastUpdated: new Date().toISOString(),
-          stripeSubscriptionStatus: subscription.status
+          status: subscription.status || '',
+          lastUpdated: new Date().toISOString(),
+          stripeSubscriptionStatus: subscription.status || ''
         }
         
         // Handle specific status transitions
@@ -164,14 +164,14 @@ export async function POST(request: NextRequest) {
         // Handle subscription cancellation - set credits to 0 (no free plan anymore)
         const now = new Date()
         
-        // Set credits to 0 immediately when subscription is canceled
-        await creditUtils.setZeroCredits(userId)
+        // Use atomic Redis transaction for final cancellation
+        const multi = redis.multi()
         
-        // Update subscription data to reflect cancellation
-        await redis.hset(KEYS.USER_SUBSCRIPTION(userId), {
+        // Update subscription data to reflect final cancellation
+        multi.hset(KEYS.USER_SUBSCRIPTION(userId), {
           plan: 'No Active Plan',
           planType: 'NONE',
-          status: 'canceled',
+          status: 'canceled', // Final status after period ends
           amount: '0',
           interval: 'month',
           lastUpdated: now.toISOString(),
@@ -181,14 +181,16 @@ export async function POST(request: NextRequest) {
           stripeSubscriptionId: ''
         })
         
-        // Remove any scheduled credit resets since user has no plan
-        await redis.hset(KEYS.USER_CREDITS(userId), {
+        // Set credits to 0 when subscription actually ends
+        multi.hset(KEYS.USER_CREDITS(userId), {
           total: '0',
           used: '0',
           resetDate: '', // No resets for users without subscription
           lastUpdate: now.toISOString(),
           subscriptionDeleted: 'true' // Mark this as a genuine subscription deletion
         })
+        
+        await multi.exec()
         
         // logger.log(`User ${userId} downgraded to Free plan after subscription cancellation`)
         

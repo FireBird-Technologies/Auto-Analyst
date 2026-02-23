@@ -7,7 +7,7 @@ import { useToast } from '@/components/ui/use-toast';
 import { Loader2, ShieldAlert, CheckCircle } from 'lucide-react'
 import Layout from '@/components/layout'
 import logger from '@/lib/utils/logger'
-import { TrialUtils } from '@/lib/credits-config';
+import { CreditConfig, CREDIT_THRESHOLDS } from '@/lib/credits-config'
 
 export default function CheckoutSuccess() {
   const router = useRouter()
@@ -33,7 +33,7 @@ export default function CheckoutSuccess() {
       
       toast({
         title: 'Trial Started!',
-        description: `Your ${TrialUtils.getTrialDisplayText()} has started with full access.`,
+        description: `Your subscription has been activated with full access.`,
         duration: 4000
       });
       

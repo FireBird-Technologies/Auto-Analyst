@@ -9,10 +9,32 @@ import Link from 'next/link';
 import { Infinity as InfinityIcon } from 'lucide-react';
 import { MODEL_TIERS } from '@/lib/model-tiers';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { TrialUtils } from '@/lib/credits-config';
 
 // Define pricing tiers with both monthly and yearly options
 const pricingTiers = [
+  {
+    name: 'Free',
+    monthly: {
+      price: 0,
+      priceId: null,
+    },
+    yearly: {
+      price: 0,
+      priceId: null,
+    },
+    credits: {
+      monthly: 20,
+      yearly: 20,
+    },
+    features: [
+      '20 credits',
+      'No support',
+      '1 free code fix per query',
+      '4 messages per month',
+    ],
+    highlight: false,
+    trial: false,
+  },
   {
     name: 'Standard',
     monthly: {
@@ -29,10 +51,12 @@ const pricingTiers = [
       yearly: 500,
     },
     features: [
-      'Advanced data analysis',
-      'Access to all models',
+      '500 credits or 100+ analysis/month',
+      'Deep Analysis',
+      'AI Code Edit',
+      '3 free code fix per query',
+      'Latest models',
       'Priority support',
-      `${TrialUtils.getTrialDisplayText()}`,
     ],
     highlight: true,
     trial: true,
@@ -53,12 +77,12 @@ const pricingTiers = [
     },
     features: [
       'Everything in Standard',
-      'Unlimited credits',
       'Dedicated support',
       'Priority processing',
       'Custom integrations',
       'Tailored solutions',
       'Marketing Analytics APIs',
+      'Specialized Agents'  
     ],
     highlight: false,
   }
@@ -133,6 +157,11 @@ export default function PricingPage() {
   const handleSubscribe = (plan: string, cycle: string) => {
     if (plan === 'enterprise') {
       router.push('/contact?subject=Enterprise%20Plan%20Inquiry');
+      return;
+    }
+    
+    if (plan === 'free') {
+      router.push('/chat');
       return;
     }
     
@@ -212,12 +241,16 @@ export default function PricingPage() {
           </div>
         </div>
         
-        {/* Pricing cards */}
-        <div className="mt-16 grid grid-cols-1 gap-8 md:grid-cols-2 max-w-4xl mx-auto">
+        {/* Pricing cards - Updated to show 3 cards */}
+        <div className="mt-16 grid grid-cols-1 gap-8 md:grid-cols-3 max-w-6xl mx-auto">
           {pricingTiers.map((tier) => (
             <motion.div
               key={tier.name}
-              className={`flex flex-col h-full bg-white rounded-lg shadow-md ${tier.highlight ? 'border-2 border-[#FF7F7F] shadow-lg relative' : 'border border-gray-200'}`}
+              className={`flex flex-col h-full bg-white rounded-lg shadow-md ${
+                tier.highlight 
+                  ? 'border-2 border-[#FF7F7F] shadow-lg relative' 
+                  : 'border border-gray-200'
+              }`}
               whileHover={{ translateY: -5 }}
               transition={{ duration: 0.3 }}
             >
@@ -234,14 +267,16 @@ export default function PricingPage() {
                   <span className="text-5xl font-extrabold tracking-tight text-gray-900">
                     {tier.name === 'Enterprise' 
                       ? '' 
-                      : `$${billingCycle === 'monthly' 
+                      : tier.name === 'Free'
+                        ? '$0'
+                        : `$${billingCycle === 'monthly' 
                             ? tier.monthly.price
                             : tier.name === 'Standard'
-                              ? (tier.yearly.price ? (tier.yearly.price / 12).toFixed(2) : '0.00') // Show monthly equivalent of yearly price
+                              ? (tier.yearly.price ? (tier.yearly.price / 12).toFixed(2) : '0.00')
                               : tier.yearly.price}`}
                   </span>
                   <span className="ml-1 text-xl font-medium text-gray-500">
-                    {tier.monthly.price === 0 || tier.name === 'Enterprise'
+                    {tier.name === 'Free' || tier.monthly.price === 0 || tier.name === 'Enterprise'
                       ? '' 
                       : `/${billingCycle === 'monthly' ? 'mo' : (tier.name === 'Standard' ? 'mo' : 'yr')}`}
                   </span>
@@ -281,21 +316,25 @@ export default function PricingPage() {
                   className={`w-full py-3 px-6 rounded-lg font-medium transition-colors ${
                     tier.highlight
                       ? 'bg-[#FF7F7F] hover:bg-[#FF6666] text-white'
-                      : 'bg-white text-gray-900 border border-gray-300 hover:bg-gray-50'
+                      : tier.name === 'Free'
+                        ? 'bg-gray-100 text-gray-700 border border-gray-300 hover:bg-gray-200'
+                        : 'bg-white text-gray-900 border border-gray-300 hover:bg-gray-50'
                   }`}
                 >
-                  {tier.trial
-                    ? `Start ${TrialUtils.getTrialDisplayText()}`
-                    : tier.name === 'Enterprise'
-                      ? 'Contact Sales'
-                      : 'Subscribe'}
+                  {tier.name === 'Free'
+                    ? 'Get Started'
+                    : tier.trial
+                      ? `Get Started`
+                      : tier.name === 'Enterprise'
+                        ? 'Contact Sales'
+                        : 'Subscribe'}
                 </button>
               </div>
             </motion.div>
           ))}
         </div>
         
-        {/* Feature comparison table */}
+        {/* Feature comparison table - Updated to include Free plan */}
         <div className="mt-24">
           <h2 className="text-2xl font-bold text-center mb-12">Compare Plans</h2>
           <div className="overflow-x-auto">
@@ -323,11 +362,39 @@ export default function PricingPage() {
                 </tr>
                 <tr>
                   <td className="py-4 px-6 border-b text-gray-700 font-medium">Data Analysis</td>
-                  <td className="py-4 px-6 border-b text-center">Advanced</td>
-                  <td className="py-4 px-6 border-b text-center">Advanced</td>
+                  <td className="py-4 px-6 border-b text-center">Basic</td>
+                  <td className="py-4 px-6 border-b text-center">Deep Analysis</td>
+                  <td className="py-4 px-6 border-b text-center">Deep Analysis</td>
+                </tr>
+                <tr>
+                  <td className="py-4 px-6 border-b text-gray-700 font-medium">Code Fixes per Query</td>
+                  <td className="py-4 px-6 border-b text-center">1 free</td>
+                  <td className="py-4 px-6 border-b text-center">3 free</td>
+                  <td className="py-4 px-6 border-b text-center">3 free</td>
+                </tr>
+                <tr>
+                  <td className="py-4 px-6 border-b text-gray-700 font-medium">Messages per Month</td>
+                  <td className="py-4 px-6 border-b text-center">4</td>
+                  <td className="py-4 px-6 border-b text-center">Unlimited</td>
+                  <td className="py-4 px-6 border-b text-center">Unlimited</td>
+                </tr>
+                <tr>
+                  <td className="py-4 px-6 border-b text-gray-700 font-medium">Model Access</td>
+                  <td className="py-4 px-6 border-b text-center">Basic</td>
+                  <td className="py-4 px-6 border-b text-center">Latest models</td>
+                  <td className="py-4 px-6 border-b text-center">Latest models</td>
+                </tr>
+                <tr>
+                  <td className="py-4 px-6 border-b text-gray-700 font-medium">Support Level</td>
+                  <td className="py-4 px-6 border-b text-center">No support</td>
+                  <td className="py-4 px-6 border-b text-center">Priority</td>
+                  <td className="py-4 px-6 border-b text-center">Dedicated</td>
                 </tr>
                 <tr>
                   <td className="py-4 px-6 border-b text-gray-700 font-medium">Custom API Access</td>
+                  <td className="py-4 px-6 border-b text-center">
+                    <X className="h-5 w-5 text-red-500 mx-auto" />
+                  </td>
                   <td className="py-4 px-6 border-b text-center">
                     <Check className="h-5 w-5 text-green-500 mx-auto" />
                   </td>
@@ -337,6 +404,9 @@ export default function PricingPage() {
                 </tr>
                 <tr>
                   <td className="py-4 px-6 border-b text-gray-700 font-medium">Custom Integrations</td>
+                  <td className="py-4 px-6 border-b text-center">
+                    <X className="h-5 w-5 text-red-500 mx-auto" />
+                  </td>
                   <td className="py-4 px-6 border-b text-center">
                     <X className="h-5 w-5 text-red-500 mx-auto" />
                   </td>
@@ -352,11 +422,9 @@ export default function PricingPage() {
                   <td className="py-4 px-6 border-b text-center">
                     <Check className="h-5 w-5 text-green-500 mx-auto" />
                   </td>
-                </tr>
-                <tr>
-                  <td className="py-4 px-6 border-b text-gray-700 font-medium">Support Level</td>
-                  <td className="py-4 px-6 border-b text-center">Priority</td>
-                  <td className="py-4 px-6 border-b text-center">Dedicated</td>
+                  <td className="py-4 px-6 border-b text-center">
+                    <Check className="h-5 w-5 text-green-500 mx-auto" />
+                  </td>
                 </tr>
               </tbody>
             </table>
@@ -468,10 +536,6 @@ export default function PricingPage() {
             <div className="py-6">
               <h3 className="text-lg font-medium text-gray-900">How are credits reset?</h3>
               <p className="mt-2 text-gray-600">Credits are reset each month from your individual checkout date, not on the first of the month.</p>
-            </div>
-            <div className="py-6">
-              <h3 className="text-lg font-medium text-gray-900">What happens during the {TrialUtils.getDurationDescription()} trial?</h3>
-              <p className="mt-2 text-gray-600">You get immediate access to {TrialUtils.getTrialCredits()} credits and all Standard plan features. Your card is authorized but not charged until day {TrialUtils.getTrialConfig().duration}. You can cancel anytime during the trial without being charged.</p>
             </div>
             <div className="py-6">
               <h3 className="text-lg font-medium text-gray-900">Can I upgrade or downgrade my plan?</h3>

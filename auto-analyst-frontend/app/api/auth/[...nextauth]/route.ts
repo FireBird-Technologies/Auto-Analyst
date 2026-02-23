@@ -17,9 +17,9 @@ const handler = NextAuth({
       }
     }),
     CredentialsProvider({
-      name: "Temporary Login",
+      name: "Admin Access",  // or whatever you prefer
       credentials: {
-        password: { label: "Temporary Code", type: "password" },
+        password: { label: "Admin Code", type: "password" },
         isAdmin: { label: "Is Admin", type: "text" }
       },
       async authorize(credentials) {

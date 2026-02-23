@@ -2,7 +2,6 @@
 
 import React, { useEffect, useRef, useCallback, useState } from "react"
 import { motion } from "framer-motion"
-import LoadingIndicator from "@/components/chat/LoadingIndicator"
 import MessageContent from "@/components/chat/MessageContent"
 import PlotlyChart from "@/components/chat/PlotlyChart"
 import MatplotlibChart from "@/components/chat/MatplotlibChart"
@@ -12,16 +11,20 @@ import CodeCanvas from "./CodeCanvas"
 import CodeIndicator from "./CodeIndicator"
 import CodeFixButton from "./CodeFixButton"
 import { v4 as uuidv4 } from 'uuid'
-import { Code, AlertTriangle, Lock } from "lucide-react"
+import { Code, AlertTriangle, Lock, Loader2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import axios from "axios"
 import { useSessionStore } from '@/lib/store/sessionStore'
+import ChatProcessingSpin from "./ChatProcessingSpin"
+import { processTableMarkersInErrorOutput, processTableMarkersInOutput } from '@/components/chat/TableRender'
 import logger from '@/lib/utils/logger'
 import { useToast } from "@/components/ui/use-toast"
 import API_URL from '@/config/api'
 import { useUserSubscription, useUserSubscriptionStore } from '@/lib/store/userSubscriptionStore'
 import { useFeatureAccess } from '@/lib/hooks/useFeatureAccess'
 import { PremiumFeatureButton } from '@/components/features/FeatureGate'
+import { useVisualizationsStore } from '@/lib/store/visualizationsStore'
+import { Pin, PinOff, Maximize2, X } from 'lucide-react'
 
 interface PlotlyMessage {
   type: "plotly"
@@ -51,6 +54,7 @@ interface CodeOutput {
   content: string | any;
   messageIndex: number;
   codeId: string;
+  vizIndex?: number; // Add visualization index for multiple viz from same code
 }
 
 interface ChatWindowProps {
@@ -67,6 +71,9 @@ interface CodeFixState {
   isFixing: boolean
   codeBeingFixed: string | null
 }
+
+// Simple text cycling loader like ChatGPT - just text, no background
+
 
 const ChatWindow: React.FC<ChatWindowProps> = ({ messages, isLoading, onSendMessage, showWelcome, chatNameGenerated = false, sessionId, setSidebarOpen }) => {
   const chatWindowRef = useRef<HTMLDivElement>(null)
@@ -87,7 +94,63 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ messages, isLoading, onSendMess
   const { subscription } = useUserSubscriptionStore()
   const codeEditAccess = useFeatureAccess('AI_CODE_EDIT', subscription)
   const codeFixAccess = useFeatureAccess('AI_CODE_FIX', subscription)
+  const { addOrUpdatePlotly, addOrUpdateMatplotlib, unpinVisualization, visualizations } = useVisualizationsStore()
   
+  // Add state for fullscreen visualization
+  const [fullscreenViz, setFullscreenViz] = useState<{ type: 'plotly' | 'matplotlib', content: any } | null>(null)
+  
+  // Simple hash function for code content
+  const hashCode = useCallback((str: string): string => {
+    let hash = 0;
+    if (str.length === 0) return hash.toString();
+    for (let i = 0; i < str.length; i++) {
+      const char = str.charCodeAt(i);
+      hash = ((hash << 5) - hash) + char;
+      hash = hash & hash;
+    }
+    return Math.abs(hash).toString(); // Add Math.abs() to match store
+  }, []);
+
+  // Helper function to check if a visualization is pinned
+  const isVisualizationPinned = useCallback((content: any, code: string, vizIndex?: number): boolean => {
+    try {
+      // Use the same hash logic as togglePinVisualization
+      const hashInput = code + (vizIndex !== undefined ? `_viz_${vizIndex}` : '');
+      const codeHash = hashInput ? hashCode(hashInput) : '';
+      return visualizations.some(viz => viz.codeHash === codeHash);
+    } catch (error) {
+      console.warn('Error checking pin status:', error);
+      return false;
+    }
+  }, [visualizations, hashCode]);
+
+  // Helper function to toggle pin status
+  const togglePinVisualization = useCallback((content: any, code: string, type: 'plotly' | 'matplotlib', vizIndex?: number) => {
+    try {
+      // Include visualization index in hash to make multiple viz from same code unique
+      const hashInput = code + (vizIndex !== undefined ? `_viz_${vizIndex}` : '');
+      const codeHash = hashInput ? hashCode(hashInput) : '';
+      const existingViz = visualizations.find(viz => viz.codeHash === codeHash);
+      
+      console.log('Pin toggle:', { codeHash, exists: !!existingViz, type, vizIndex });
+      
+      if (existingViz) {
+        unpinVisualization(codeHash);
+        console.log('Unpinned visualization');
+      } else {
+        if (type === 'plotly') {
+          addOrUpdatePlotly(content.data || [], content.layout || {}, `Chart ${vizIndex ? `#${vizIndex + 1}` : ''} from Chat`, hashInput);
+          console.log('Pinned plotly visualization');
+        } else if (type === 'matplotlib') {
+          addOrUpdateMatplotlib(content, `Chart ${vizIndex ? `#${vizIndex + 1}` : ''} from Chat`, hashInput);
+          console.log('Pinned matplotlib visualization');
+        }
+      }
+    } catch (error) {
+      console.error('Pin toggle error:', error);
+    }
+  }, [visualizations, hashCode, unpinVisualization, addOrUpdatePlotly, addOrUpdateMatplotlib]);
+
   // Set chatCompleted when chat name is generated
   useEffect(() => {
     if (chatNameGenerated && messages.length > 0) {
@@ -96,7 +159,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ messages, isLoading, onSendMess
       // Reset chatCompleted after a delay to prepare for the next response
       const timer = setTimeout(() => {
         setChatCompleted(false);
-      }, 10000); // Increase to 10 seconds
+      }, 2000); // Reset to 2 seconds
       
       return () => clearTimeout(timer);
     }
@@ -110,10 +173,12 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ messages, isLoading, onSendMess
   // Add the fetchLatestCode function before extractCodeFromMessages
   const fetchLatestCode = useCallback(async (messageId: number) => {
     if (!messageId) {
+      console.log("❌ fetchLatestCode: No messageId provided");
       return null;
     }
     
     try {
+      console.log(`🔍 fetchLatestCode: Requesting latest code for message_id: ${messageId}`);
       
       const response = await axios.post(`${API_URL}/code/get-latest-code`, {
         message_id: messageId
@@ -123,14 +188,22 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ messages, isLoading, onSendMess
         },
       });
       
+      console.log(`📋 fetchLatestCode response:`, response.data);
       
       if (response.data.found) {
+        console.log(`✅ fetchLatestCode: Found latest code for message_id: ${messageId}`);
         return response.data;
+      } else {
+        console.log(`❌ fetchLatestCode: No execution record found for message_id: ${messageId}`);
       }
       
       return null;
     } catch (error) {
-      console.error("Error fetching latest code:", error);
+      console.error("❌ fetchLatestCode: Error fetching latest code:", error);
+      if (axios.isAxiosError(error)) {
+        console.error("❌ fetchLatestCode: Response status:", error.response?.status);
+        console.error("❌ fetchLatestCode: Response data:", error.response?.data);
+      }
       return null;
     }
   }, [sessionId]);
@@ -141,9 +214,10 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ messages, isLoading, onSendMess
     
     // First, try to fetch the latest code if we have a message_id
     const message = messagesToExtract[0];
-    const actualMessageId = message?.message_id || messageIndex;
+    const actualMessageId = message?.message_id;
     
     if (actualMessageId && typeof actualMessageId === 'number') {
+      console.log(`🔍 Fetching latest code for message_id: ${actualMessageId}`);
       const latestCodeData = await fetchLatestCode(actualMessageId);
       
       // If we have latest code from a previous execution, use it
@@ -169,7 +243,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ messages, isLoading, onSendMess
     // If no latest code found, extract code blocks from messages as before
     const codeByLanguage: Record<string, { code: string, blocks: string[], agents: string[] }> = {};
     
-    messagesToExtract.forEach((message) => {
+    messagesToExtract.forEach((message: any) => {
       if (message.sender === "ai" && typeof message.text === "string") {
         const codeBlockRegex = /```([a-zA-Z0-9_]+)?\n([\s\S]*?)```/g;
         
@@ -284,6 +358,12 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ messages, isLoading, onSendMess
     setHiddenCanvas(true)
   }, [])
   
+  // Function to open canvas (for fix button)
+  const handleOpenCanvas = useCallback(() => {
+    setCodeCanvasOpen(true)
+    setHiddenCanvas(false) // Make sure it's not hidden
+  }, [])
+
   // Update the handleCanvasToggle function to fetch latest code
   const handleCanvasToggle = useCallback(() => {
     // Toggle canvas visibility instead of existence
@@ -385,7 +465,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ messages, isLoading, onSendMess
       // Reset chatCompleted after a delay
       const timer = setTimeout(() => {
         setChatCompleted(false);
-      }, 10000);
+      }, 2000);
       
       return () => clearTimeout(timer);
     }
@@ -640,7 +720,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ messages, isLoading, onSendMess
       // Process all plotly outputs
       const plotlyOutputItems: CodeOutput[] = [];
       
-      result.plotly_outputs.forEach((plotlyOutput: string) => {
+      result.plotly_outputs.forEach((plotlyOutput: string, vizIndex: number) => {
         try {
           const plotlyContent = plotlyOutput.replace(/```plotly\n|\n```/g, "");
           
@@ -649,7 +729,8 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ messages, isLoading, onSendMess
             type: 'plotly',
             content: plotlyData,
             messageIndex: messageId,
-            codeId: entryId
+            codeId: entryId,
+            vizIndex: vizIndex // Add visualization index
           });
         } catch (e) {
           console.error("Error parsing Plotly data:", e);
@@ -707,19 +788,59 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ messages, isLoading, onSendMess
   // Handle fix start
   const handleFixStart = useCallback((codeId: string) => {
     setCodeFixState({ isFixing: true, codeBeingFixed: codeId })
+    
+    // Set a timeout to reset fixing state if it gets stuck
+    setTimeout(() => {
+      setCodeFixState(prev => {
+        if (prev.isFixing && prev.codeBeingFixed === codeId) {
+          console.warn(`Fix state reset for ${codeId} due to timeout`)
+          return { isFixing: false, codeBeingFixed: null }
+        }
+        return prev
+      })
+    }, 90000) // 90 seconds timeout
   }, [])
 
   // Handle insufficient credits
   const handleCreditCheck = useCallback((codeId: string, hasEnough: boolean) => {
     if (!hasEnough) {
-      // You would typically show a credits modal here
-      // For now, just reset the fixing state
+      // Reset the fixing state
       setCodeFixState({ isFixing: false, codeBeingFixed: null })
+      
+      toast({
+        title: "Insufficient credits",
+        description: "You need at least 1 credit to fix code errors.",
+        variant: "destructive",
+        duration: 5000,
+      })
     }
-  }, [])
+  }, [toast])
 
   // Execute code function for auto-run after fixes
   const executeCodeFromChatWindow = useCallback(async (entryId: string, code: string, language: string) => {
+    // Use sessionId prop first, then fall back to store sessionId
+    const currentSessionId = sessionId || storeSessionId;
+    
+    // DEBUG: Log session information
+    console.log('🔍 AUTO-EXECUTE DEBUG:', {
+      entryId,
+      sessionIdProp: sessionId,
+      storeSessionId: storeSessionId,
+      currentSessionId: currentSessionId,
+      messageId: codeEntries.find(entry => entry.id === entryId)?.messageIndex,
+      codeLength: code.length
+    })
+    
+    if (!currentSessionId) {
+      console.error('❌ No session ID available for auto-execution!')
+      toast({
+        title: "Session Error",
+        description: "No session ID available. Please refresh the page.",
+        variant: "destructive"
+      })
+      return
+    }
+    
     // Only execute Python code for now
     if (language !== 'python') {
       toast({
@@ -748,11 +869,12 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ messages, isLoading, onSendMess
       // Set the message ID in the session first so the backend knows which message this code belongs to
       if (messageId) {
         try {
+          console.log(`🔍 Setting message_id in backend: ${messageId} for session: ${currentSessionId}`)
           await axios.post(`${API_URL}/set-message-info`, {
             message_id: messageId
           }, {
             headers: {
-              ...(sessionId && { 'X-Session-ID': sessionId }),
+              'X-Session-ID': currentSessionId,
             },
           });
         } catch (error) {
@@ -761,16 +883,18 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ messages, isLoading, onSendMess
       }
       
       // Now execute the code with the associated message ID
+      console.log(`🔍 Executing code with session: ${currentSessionId}, message: ${messageId}`)
       const response = await axios.post(`${API_URL}/code/execute`, {
         code: code.trim(),
-        session_id: sessionId,
+        session_id: currentSessionId,
         message_id: messageId
       }, {
         headers: {
-          ...(sessionId && { 'X-Session-ID': sessionId }),
+          'X-Session-ID': currentSessionId,
         },
       })
       
+      console.log('🔍 Auto-execution response:', response.data)
       
       // Pass execution result to handleCodeCanvasExecute
       handleCodeCanvasExecute(entryId, response.data);
@@ -782,10 +906,13 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ messages, isLoading, onSendMess
       // Pass error to handleCodeCanvasExecute
       handleCodeCanvasExecute(entryId, { error: errorMessage });
     }
-  }, [codeEntries, sessionId, handleCodeCanvasExecute, toast]);
+  }, [codeEntries, sessionId, storeSessionId, handleCodeCanvasExecute, toast]);
 
   // Handle fix complete
   const handleFixComplete = useCallback((codeId: string, fixedCode: string) => {
+    // Always reset fixing state first
+    setCodeFixState({ isFixing: false, codeBeingFixed: null })
+    
     // Increment the fix count
     setCodeFixes(prev => {
       const updatedFixes = { ...prev };
@@ -843,7 +970,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ messages, isLoading, onSendMess
             duration: 2000,
           });
         }
-      }, 500);
+      }, 100); // Changed from 500ms to 100ms for faster auto-run
     }
 
     // Reset fixing state
@@ -1010,12 +1137,12 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ messages, isLoading, onSendMess
           <div className={message.sender === "ai" ? "overflow-x-auto" : ""}>
             {Array.isArray(messageContent) ? (
               // Render message with code indicators
-              messageContent.map((part, partIndex) => {
+              messageContent.map((part: any, partIndex: number) => {
                 if (typeof part === 'string') {
                   // Handle plotly blocks embedded in the string
                   if (part.includes('```plotly')) {
                     const plotlyParts = part.split(/(```plotly[\s\S]*?```)/);
-                    return plotlyParts.map((plotlyPart, plotlyIndex) => {
+                    return plotlyParts.map((plotlyPart: string, plotlyIndex: number) => {
                       if (plotlyPart.startsWith('```plotly') && plotlyPart.endsWith('```')) {
                         return renderPlotlyBlock(plotlyPart, `${index}-${partIndex}-${plotlyIndex}`);
                       } else if (plotlyPart.trim()) {
@@ -1033,6 +1160,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ messages, isLoading, onSendMess
                           chatId={message.chat_id}
                           isLastPart={partIndex === messageContent.length - 1 && plotlyIndex === plotlyParts.length - 1}
                           outputs={codeOutputs[message.message_id || index] || []}
+                          isFirstMessage={index === 0}
                         />;
                       }
                       return null;
@@ -1053,6 +1181,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ messages, isLoading, onSendMess
                     chatId={message.chat_id}
                     isLastPart={partIndex === messageContent.length - 1}
                     outputs={codeOutputs[message.message_id || index] || []}
+                    isFirstMessage={index === 0}
                   />;
                 } else if (part.type === 'code') {
                   // Code indicator
@@ -1075,6 +1204,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ messages, isLoading, onSendMess
                 chatId={message.chat_id}
                 isLastPart={true}
                 outputs={codeOutputs[message.message_id || index] || []}
+                isFirstMessage={index === 0}
               />
             )}
           </div>
@@ -1107,375 +1237,9 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ messages, isLoading, onSendMess
   };
 
   // Helper function to process table markers in error content (similar to processTableMarkersInOutput but with red styling)
-  const processTableMarkersInErrorOutput = useCallback((content: string) => {
-    const tableRegex = /<TABLE_START>\n?([\s\S]*?)\n?<TABLE_END>/g;
-    const parts: React.ReactNode[] = [];
-    let lastIndex = 0;
-    let match;
-    let partIndex = 0;
-    
-    // Process all table markers
-    while ((match = tableRegex.exec(content)) !== null) {
-      // Add content before the table if any
-      if (match.index > lastIndex) {
-        const beforeContent = content.substring(lastIndex, match.index);
-        if (beforeContent.trim()) {
-          parts.push(
-            <pre key={`before-${partIndex}`} className="text-xs text-red-700 font-mono whitespace-pre-wrap">
-              {beforeContent}
-            </pre>
-          );
-        }
-      }
-      
-      // Process the table content
-      const tableContent = match[1];
-      
-      // Simple table parser for errors - use better formatting
-      const parseErrorTableContent = (content: string) => {
-        return (
-          <div className="overflow-x-auto max-w-full">
-            <pre className="text-xs font-mono text-red-700 whitespace-pre leading-relaxed bg-red-25 p-2 rounded">
-              {content}
-            </pre>
-          </div>
-        );
-      };
-      
-      // Add the formatted table with error styling
-      parts.push(
-        <div key={`table-${partIndex}`} className="bg-red-50 border border-red-200 rounded-md p-3 my-2">
-          {parseErrorTableContent(tableContent)}
-        </div>
-      );
-      
-      lastIndex = match.index + match[0].length;
-      partIndex++;
-    }
-    
-    // Add remaining content after the last table
-    if (lastIndex < content.length) {
-      const remainingContent = content.substring(lastIndex);
-      if (remainingContent.trim()) {
-        parts.push(
-          <pre key={`after-${partIndex}`} className="text-xs text-red-700 font-mono whitespace-pre-wrap">
-            {remainingContent}
-          </pre>
-        );
-      }
-    }
-    
-    // If no tables were found, return the original content as pre
-    if (parts.length === 0) {
-      return (
-        <pre className="text-xs text-red-700 font-mono whitespace-pre-wrap">
-          {content}
-        </pre>
-      );
-    }
-    
-    return <div>{parts}</div>;
-  }, []);
 
-  // Helper function to process table markers in output content
-  const processTableMarkersInOutput = useCallback((content: string) => {
-    const tableRegex = /<TABLE_START>\n?([\s\S]*?)\n?<TABLE_END>/g;
-    const parts: React.ReactNode[] = [];
-    let lastIndex = 0;
-    let match;
-    let partIndex = 0;
-    
-    // Process all table markers
-    while ((match = tableRegex.exec(content)) !== null) {
-      // Add content before the table if any
-      if (match.index > lastIndex) {
-        const beforeContent = content.substring(lastIndex, match.index);
-        if (beforeContent.trim()) {
-          parts.push(
-            <pre key={`before-${partIndex}`} className="text-xs text-gray-800 font-mono whitespace-pre-wrap">
-              {beforeContent}
-            </pre>
-          );
-        }
-      }
-      
-      // Process the table content
-      const tableContent = match[1];
-      
-      // Simple table parser for common pandas output formats
-      const parseTableContent = (content: string) => {
-        const lines = content.split('\n').filter(line => line.trim());
-        if (lines.length === 0) return null;
-        
-        // Generic table parser that works for any table type
-        const parseGenericTable = (tableLines: string[]) => {
-          const rows: string[][] = [];
-          
-          // Parse all lines into potential columns
-          tableLines.forEach(line => {
-            if (line.trim()) {
-              // Check if line contains pipe delimiters (new format)
-              if (line.includes('|')) {
-                // Split by pipe delimiter and trim each part
-                const columns = line.split('|').map(col => col.trim()).filter(Boolean);
-                if (columns.length > 0) {
-                  rows.push(columns);
-                }
-              } else {
-                // Fallback to old format - split on multiple spaces
-                const columns = line.trim().split(/\s{2,}/).filter(col => col.trim());
-                if (columns.length > 0) {
-                  rows.push(columns);
-                }
-              }
-            }
-          });
-          
-          if (rows.length === 0) return null;
-          
-          // Find the maximum number of columns across all rows
-          const maxCols = Math.max(...rows.map(row => row.length));
-          
-          // Step 1: Analyze the content and structure of the table
-          // - Identify potential header rows (first row or rows with all text)
-          // - Identify potential row labels (first column with text values)
-          // - Determine if index column is used (first column with sequential numbers 0,1,2...)
-          
-          let hasHeaderRow = false;
-          let headerRowIndex = -1;
-          let hasRowLabels = false;
-          let hasIndexColumn = false;
-          let indexColumnIndex = -1;
-          let rowLabelColumnIndex = 0; // Default to first column
-          
-          // Check first row - if it has mostly text, likely a header
-          if (rows.length > 0 && rows[0].length > 0) {
-            const firstRow = rows[0];
-            const textCellCount = firstRow.filter(cell => isNaN(Number(cell))).length;
-            hasHeaderRow = textCellCount / firstRow.length > 0.5; // If more than half are text
-            if (hasHeaderRow) headerRowIndex = 0;
-          }
-          
-          // Check first column - look for patterns
-          if (rows.length > 2) {
-            // If first column contains sequential numbers starting from 0 or 1, it's likely an index
-            const firstColValues = rows.slice(hasHeaderRow ? 1 : 0).map(row => row[0]);
-            
-            // Check if first column is numeric and sequential
-            if (firstColValues.every(val => !isNaN(Number(val)))) {
-              const nums = firstColValues.map(Number);
-              // Check if sequential (0,1,2... or 1,2,3...)
-              const isSequential = nums.every((num, i) => 
-                i === 0 || num === nums[i-1] + 1 || num === nums[i-1]);
-                
-              hasIndexColumn = isSequential;
-              if (hasIndexColumn) indexColumnIndex = 0;
-            }
-            
-            // If not index but has text values, likely row labels
-            if (!hasIndexColumn) {
-              // Check for row labels in first column
-              const firstColLabels = firstColValues.some(val => 
-                isNaN(Number(val)) && val.match(/^[a-zA-Z_][a-zA-Z0-9_]*$/));
-                
-              hasRowLabels = firstColLabels;
-              rowLabelColumnIndex = 0;
-              
-              // Special case: Sometimes row labels are last column in pandas dataframes
-              if (!hasRowLabels && rows[0].length > 1) {
-                const lastColValues = rows.slice(hasHeaderRow ? 1 : 0).map(row => 
-                  row.length > 0 ? row[row.length-1] : '');
-                const lastColLabels = lastColValues.some(val => 
-                  isNaN(Number(val)) && val.match(/^[a-zA-Z_][a-zA-Z0-9_]*$/));
-                
-                if (lastColLabels) {
-                  hasRowLabels = true;
-                  rowLabelColumnIndex = rows[0].length - 1;
-                }
-              }
-              
-              // Special case for "stories" or similar categorical columns that should be row labels
-              // Check each column for keywords that suggest it should be a row label
-              if (!hasRowLabels) {
-                // Check header row for column names that suggest categorical values
-                const rowLabelKeywords = ['stories', 'category', 'type', 'group', 'class', 'label', 'year'];
-                
-                if (hasHeaderRow && rows[0].length > 0) {
-                  // Check each column in the header
-                  for (let i = 0; i < rows[0].length; i++) {
-                    const colName = rows[0][i].toLowerCase();
-                    if (rowLabelKeywords.some(keyword => colName.includes(keyword))) {
-                      // Found a likely row label column
-                      hasRowLabels = true;
-                      rowLabelColumnIndex = i;
-                      break;
-                    }
-                  }
-                }
-                
-                // If we still don't have row labels, check data rows for string values in any column
-                if (!hasRowLabels) {
-                  for (let colIdx = 0; colIdx < maxCols; colIdx++) {
-                    // Skip the first column which was already checked
-                    if (colIdx === 0) continue;
-                    
-                    const colValues = rows.slice(hasHeaderRow ? 1 : 0).map(row => 
-                      colIdx < row.length ? row[colIdx] : '');
-                    
-                    // Check if this column has mostly text values
-                    const textValues = colValues.filter(val => 
-                      isNaN(Number(val)) && val.match(/^[a-zA-Z_][a-zA-Z0-9_]*$/));
-                    
-                    if (textValues.length > colValues.length / 2) {
-                      hasRowLabels = true;
-                      rowLabelColumnIndex = colIdx;
-                      break;
-                    }
-                  }
-                }
-              }
-            }
-          }
-          
-          // Step 2: Normalize the table based on detected structure
-          const normalizedRows = rows.map((row, rowIndex) => {
-            let normalizedRow = [...row];
-            
-            // Identify row type
-            const isHeader = rowIndex === headerRowIndex;
-            
-            // Fix header row - ensure it aligns with data columns
-            if (isHeader && normalizedRow.length < maxCols) {
-              // Check if we need to add empty cells at beginning for alignment
-              if (hasIndexColumn || hasRowLabels) {
-                normalizedRow = ['', ...normalizedRow];
-              }
-              
-              // Ensure row has maxCols columns
-              while (normalizedRow.length < maxCols) {
-                normalizedRow.push('');
-              }
-            }
-            
-            // For all rows, ensure consistent length
-            while (normalizedRow.length < maxCols) {
-              normalizedRow.push('');
-            }
-            
-            // For data rows, check if row label needs to be moved to front
-            if (!isHeader && hasRowLabels && rowLabelColumnIndex > 0) {
-              // Move row label to front for consistent display
-              const label = normalizedRow[rowLabelColumnIndex];
-              normalizedRow.splice(rowLabelColumnIndex, 1); // Remove from original position
-              normalizedRow.unshift(label); // Add to front
-            }
-            
-            return {
-              row: normalizedRow,
-              isHeader,
-              isDataRow: !isHeader && rowIndex > 0,
-              hasRowLabel: hasRowLabels && !isHeader,
-              hasIndexColumn: hasIndexColumn && !isHeader
-            };
-          });
-          
-          return {
-            rows: normalizedRows,
-            hasHeaderRow,
-            hasRowLabels,
-            hasIndexColumn,
-            headerRowIndex,
-            rowLabelColumnIndex,
-            indexColumnIndex
-          };
-        };
-        
-        const tableInfo = parseGenericTable(lines);
-        if (!tableInfo) return null;
-        
-        const { rows, hasHeaderRow, hasRowLabels } = tableInfo;
-        
-        return (
-          <div className="overflow-x-auto max-w-full">
-            <table className="min-w-full text-sm">
-              <tbody>
-                {rows.map((rowInfo, rowIndex) => {
-                  const { row, isHeader, isDataRow, hasRowLabel, hasIndexColumn } = rowInfo;
-                  
-                  return (
-                    <tr key={rowIndex} className={isHeader ? "bg-gray-100" : "hover:bg-gray-25"}>
-                      {row.map((cell, cellIndex) => {
-                        const isNumber = !isNaN(Number(cell.replace(/,/g, ''))) && cell !== '' && !isHeader;
-                        const isFirstCol = cellIndex === 0;
-                        const isRowLabel = hasRowLabel && isFirstCol;
-                        const isIndex = hasIndexColumn && isFirstCol;
-                        const isColumnHeader = isHeader && cell !== '';
-                        const isEmpty = cell === '';
-                        
-                        return (
-                          <td 
-                            key={cellIndex} 
-                            className={`px-2 py-1.5 font-mono text-xs border-r border-gray-150 last:border-r-0 ${
-                              isColumnHeader ? 'font-semibold text-gray-900 bg-gray-100' : 
-                              isRowLabel ? 'font-semibold text-gray-900 bg-gray-50' : ''
-                            } ${
-                              isEmpty ? 'bg-gray-100' :
-                              isColumnHeader ? 'text-center bg-gray-100' :
-                              isRowLabel ? 'text-left min-w-16 bg-gray-50' :
-                              isIndex ? 'text-center min-w-10 bg-gray-50' :
-                              isNumber ? 'text-right text-gray-700 min-w-16' : 
-                              'text-center text-gray-700'
-                            }`}
-                          >
-                            {isNumber ? Number(cell.replace(/,/g, '')).toLocaleString() : cell}
-                          </td>
-                        );
-                      })}
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        );
-      };
-      
-      // Add the formatted table with simpler styling
-      parts.push(
-        <div key={`table-${partIndex}`} className="bg-white border border-gray-200 rounded-lg p-3 my-2 shadow-sm">
-          {parseTableContent(tableContent)}
-        </div>
-      );
-      
-      lastIndex = match.index + match[0].length;
-      partIndex++;
-    }
-    
-    // Add remaining content after the last table
-    if (lastIndex < content.length) {
-      const remainingContent = content.substring(lastIndex);
-      if (remainingContent.trim()) {
-        parts.push(
-          <pre key={`after-${partIndex}`} className="text-xs text-gray-800 font-mono whitespace-pre-wrap">
-            {remainingContent}
-          </pre>
-        );
-      }
-    }
-    
-    // If no tables were found, return the original content as pre
-    if (parts.length === 0) {
-      return (
-        <pre className="text-xs text-gray-800 font-mono whitespace-pre-wrap overflow-auto max-h-[400px]">
-          {content}
-        </pre>
-      );
-    }
-    
-    return <div>{parts}</div>;
-  }, []);
 
-  // Replace the entire renderCodeOutputs function with a fixed implementation
+  // Update the renderCodeOutputs function to include fullscreen buttons
   const renderCodeOutputs = (messageIndex: number) => {
     // Detect if we have an actual message ID or just an array index
     const message = messages[messageIndex];
@@ -1483,7 +1247,6 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ messages, isLoading, onSendMess
     
     // Get outputs for this specific message
     const relevantOutputs = codeOutputs[actualMessageId] || [];
-    
     
     if (relevantOutputs.length === 0) return null;
     
@@ -1504,27 +1267,19 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ messages, isLoading, onSendMess
             </div>
             
             {errorOutputs[0].codeId && (
-              codeFixAccess.hasAccess ? (
-                <CodeFixButton
-                  codeId={errorOutputs[0].codeId}
-                  errorOutput={errorOutputs[0].content as string}
-                  code={codeEntries.find(entry => entry.id === errorOutputs[0].codeId)?.code || ''}
-                  isFixing={codeFixState.isFixing && codeFixState.codeBeingFixed === errorOutputs[0].codeId}
-                  codeFixes={codeFixes}
-                  sessionId={sessionId || storeSessionId || ''}
-                  onFixStart={handleFixStart}
-                  onFixComplete={handleFixComplete}
-                  onCreditCheck={handleCreditCheck}
-                  variant="inline"
-                />
-              ) : (
-                <div className="absolute top-3 right-3">
-                  <PremiumFeatureButton
-                    featureId="AI_CODE_FIX"
-                    variant="icon"
-                  />
-                </div>
-              )
+              <CodeFixButton
+                codeId={errorOutputs[0].codeId}
+                errorOutput={errorOutputs[0].content as string}
+                code={codeEntries.find(entry => entry.id === errorOutputs[0].codeId)?.code || ''}
+                isFixing={codeFixState.isFixing && codeFixState.codeBeingFixed === errorOutputs[0].codeId}
+                codeFixes={codeFixes}
+                sessionId={sessionId || storeSessionId || ''}
+                onFixStart={handleFixStart}
+                onFixComplete={handleFixComplete}
+                onCreditCheck={handleCreditCheck}
+                onCanvasOpen={handleOpenCanvas}
+                variant="inline"
+              />
             )}
             
             {(() => {
@@ -1539,16 +1294,14 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ messages, isLoading, onSendMess
         {/* Show text outputs */}
         {textOutputs.length > 0 && (
           <div className="bg-gray-50 border border-gray-200 rounded-md p-3 relative">
-            <div className="flex items-center text-gray-700 font-medium mb-2">
-              Output
-            </div>
-            
-            {/* Add a fix button for outputs that look like errors */}
-            {textOutputs[0].codeId && 
-             (textOutputs[0].content.toString().toLowerCase().includes("error") || 
-              textOutputs[0].content.toString().toLowerCase().includes("traceback") || 
-              textOutputs[0].content.toString().toLowerCase().includes("exception")) && (
-              codeFixAccess.hasAccess ? (
+            <div className="flex items-center justify-between text-gray-700 font-medium mb-2">
+              <span>Output</span>
+              
+              {/* Position fix button at the far right */}
+              {textOutputs[0].codeId && 
+               (textOutputs[0].content.toString().toLowerCase().includes("error") || 
+                textOutputs[0].content.toString().toLowerCase().includes("traceback") || 
+                textOutputs[0].content.toString().toLowerCase().includes("exception")) && (
                 <CodeFixButton
                   codeId={textOutputs[0].codeId}
                   errorOutput={textOutputs[0].content as string}
@@ -1559,17 +1312,11 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ messages, isLoading, onSendMess
                   onFixStart={handleFixStart}
                   onFixComplete={handleFixComplete}
                   onCreditCheck={handleCreditCheck}
+                  onCanvasOpen={handleOpenCanvas}
                   variant="inline"
                 />
-              ) : (
-                <div className="absolute top-3 right-3">
-                  <PremiumFeatureButton
-                    featureId="AI_CODE_FIX"
-                    variant="icon"
-                  />
-                </div>
-              )
-            )}
+              )}
+            </div>
             
             {(() => {
               const content = textOutputs[0].content;
@@ -1580,31 +1327,123 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ messages, isLoading, onSendMess
           </div>
         )}
         
-        {/* Show plotly visualizations */}
-        {plotlyOutputs.map((output, idx) => (
-          <div key={`plotly-${messageIndex}-${idx}`} className="bg-white border border-gray-200 rounded-md p-3 overflow-auto relative">
-            <div className="flex items-center text-gray-700 font-medium mb-2">
-              📊 Interactive Visualization
+        {/* Show plotly visualizations with pin and fullscreen buttons */}
+        {plotlyOutputs.map((output, idx) => {
+          const codeEntry = codeEntries.find(entry => entry.id === output.codeId);
+          const currentCode = codeEntry?.code || '';
+          const isPinned = isVisualizationPinned(output.content, currentCode, idx);
+          
+          return (
+            <div key={`plotly-${messageIndex}-${idx}`} className="bg-white border border-gray-200 rounded-md p-3 overflow-auto relative">
+              <div className="flex items-center justify-between text-gray-700 font-medium mb-2">
+                <span>📊 Interactive Visualization</span>
+                <div className="flex items-center gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setFullscreenViz({ type: 'plotly', content: output.content })}
+                    className="flex items-center gap-1 h-7 px-2 text-xs text-gray-600 border-gray-300 hover:bg-gray-100"
+                  >
+                    <Maximize2 className="h-3 w-3" />
+                    <span className="hidden sm:inline">Fullscreen</span>
+                  </Button>
+                  <Button
+                    key={`pin-plotly-${output.codeId}-${idx}-${visualizations.length}`}
+                    variant={isPinned ? "default" : "outline"}
+                    size="sm"
+                    onClick={() => {
+                      const currentCode = codeEntries.find(entry => entry.id === output.codeId)?.code || '';
+                      console.log('Pin click - Code found:', !!currentCode, 'CodeId:', output.codeId);
+                      
+                      if (currentCode) {
+                        togglePinVisualization(output.content, currentCode, 'plotly', idx);
+                      } else {
+                        // FALLBACK: Always allow pinning without warning
+                        const codeToUse = `plotly_${output.codeId}_${idx}`;
+                        togglePinVisualization(output.content, codeToUse, 'plotly', idx);
+                        
+                        // No toast warning - just pin it silently
+                      }
+                    }}
+                    className={`flex items-center gap-1 h-7 px-2 text-xs ${
+                      isPinned 
+                        ? 'bg-[#FF7F7F] hover:bg-[#FF6666] text-white' 
+                        : 'text-[#FF7F7F] border-[#FF7F7F] hover:bg-[#FF7F7F] hover:text-white'
+                    }`}
+                  >
+                    {isPinned ? <PinOff className="h-3 w-3" /> : <Pin className="h-3 w-3" />}
+                    <span className="hidden sm:inline">
+                      {isPinned ? 'Unpin' : 'Pin'}
+                    </span>
+                  </Button>
+                </div>
+              </div>
+              
+              <div className="w-full">
+                <PlotlyChart data={output.content.data} layout={output.content.layout} />
+              </div>
             </div>
-            
-            <div className="w-full">
-              <PlotlyChart data={output.content.data} layout={output.content.layout} />
-            </div>
-          </div>
-        ))}
+          );
+        })}
         
-        {/* Render matplotlib charts */}
-        {matplotlibOutputs.map((output, idx) => (
-          <div key={`matplotlib-${messageIndex}-${idx}`} className="bg-white border border-gray-200 rounded-md p-3 overflow-auto relative">
-            <div className="flex items-center text-gray-700 font-medium mb-2">
-              📈 Chart Visualization
+        {/* Render matplotlib charts with pin and fullscreen buttons */}
+        {matplotlibOutputs.map((output, idx) => {
+          const codeEntry = codeEntries.find(entry => entry.id === output.codeId);
+          const currentCode = codeEntry?.code || '';
+          const isPinned = isVisualizationPinned(output.content, currentCode, idx);
+          
+          return (
+            <div key={`matplotlib-${messageIndex}-${idx}`} className="bg-white border border-gray-200 rounded-md p-3 overflow-auto relative">
+              <div className="flex items-center justify-between text-gray-700 font-medium mb-2">
+                <span>📈 Chart Visualization</span>
+                <div className="flex items-center gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setFullscreenViz({ type: 'matplotlib', content: output.content })}
+                    className="flex items-center gap-1 h-7 px-2 text-xs text-gray-600 border-gray-300 hover:bg-gray-100"
+                  >
+                    <Maximize2 className="h-3 w-3" />
+                    <span className="hidden sm:inline">Fullscreen</span>
+                  </Button>
+                  <Button
+                    key={`pin-${output.codeId}-${idx}-${visualizations.length}`}
+                    variant={isPinned ? "default" : "outline"}
+                    size="sm"
+                    onClick={() => {
+                      const currentCode = codeEntries.find(entry => entry.id === output.codeId)?.code || '';
+                      
+                      if (currentCode) {
+                        togglePinVisualization(output.content, currentCode, 'matplotlib', idx);
+                      } else {
+                        // FALLBACK: Always allow pinning without warning
+                        console.warn('No code found for matplotlib codeId:', output.codeId);
+                        const codeToUse = `matplotlib_${output.codeId}_${idx}`;
+                        togglePinVisualization(output.content, codeToUse, 'matplotlib', idx);
+                        
+                        // No toast warning - just pin it silently
+                      }
+                    }}
+                    className={`flex items-center gap-1 h-7 px-2 text-xs ${
+                      isPinned 
+                        ? 'bg-[#FF7F7F] hover:bg-[#FF6666] text-white' 
+                        : 'text-[#FF7F7F] border-[#FF7F7F] hover:bg-[#FF7F7F] hover:text-white'
+                    }`}
+                  >
+                    {isPinned ? <PinOff className="h-3 w-3" /> : <Pin className="h-3 w-3" />}
+                    <span className="hidden sm:inline">
+                      {isPinned ? 'Unpin' : 'Pin'}
+                    </span>
+                  </Button>
+                </div>
+              </div>
+              
+              <div className="w-full">
+                <MatplotlibChart imageData={output.content} />
+              </div>
             </div>
-            
-            <div className="w-full">
-              <MatplotlibChart imageData={output.content} />
-            </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
     );
   };
@@ -1657,13 +1496,54 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ messages, isLoading, onSendMess
             transition={{ duration: 0.3 }}
             className="flex justify-start mb-8 max-w-4xl mx-auto px-4"
           >
-            <div className="relative max-w-[85%] rounded-2xl p-6 transition-shadow duration-200 hover:shadow-lg bg-white text-gray-900 shadow-md shadow-gray-200/50">
-              <LoadingIndicator />
+            {/* Simple loading with just spinner and text - no background */}
+            <div className="flex items-center space-x-3">
+              <Loader2 className="w-5 h-5 text-[#FF7F7F] animate-spin" />
+              <ChatProcessingSpin />
             </div>
           </motion.div>
         )}
         <div ref={messagesEndRef} />
       </div>
+      
+      {/* Fullscreen Modal for visualizations */}
+      {fullscreenViz && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-lg w-full h-full max-w-[95vw] max-h-[95vh] flex flex-col">
+            {/* Header with close button */}
+            <div className="flex justify-between items-center p-4 border-b bg-white rounded-t-lg">
+              <h2 className="text-xl font-semibold">
+                {fullscreenViz.type === 'plotly' ? '📊 Interactive Visualization' : '📈 Chart Visualization'}
+              </h2>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setFullscreenViz(null)}
+                className="h-8 w-8 p-0"
+              >
+                <X className="h-4 w-4" />
+              </Button>
+            </div>
+            
+            {/* Full chart area */}
+            <div className="flex-1 p-4 overflow-hidden">
+              {fullscreenViz.type === 'plotly' ? (
+                <div className="w-full h-full">
+                  <PlotlyChart 
+                    data={fullscreenViz.content.data} 
+                    layout={fullscreenViz.content.layout} 
+                    isFullscreen={true}
+                  />
+                </div>
+              ) : (
+                <div className="w-full h-full flex items-center justify-center">
+                  <MatplotlibChart imageData={fullscreenViz.content} />
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
       
       {/* Code Canvas - always render it if we have code, but control visibility */}
       {currentMessageIndex !== null && codeEntries.length > 0 && (

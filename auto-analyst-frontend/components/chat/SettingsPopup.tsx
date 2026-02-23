@@ -23,22 +23,22 @@ const SettingsPopup: React.FC<SettingsPopupProps> = ({ isOpen, onClose, initialS
   
   // Function to ensure we have a session ID
   const ensureSessionId = useCallback(() => {
+    // Don't generate temporary session IDs in SettingsPopup
+    // The session ID should be managed by the main chat components
     if (!sessionId) {
-      // Generate a temporary session ID if none exists
-      const tempId = `temp-${Date.now()}`;
-      setSessionId(tempId);
+      console.warn('No session ID available in SettingsPopup');
     }
-  }, [sessionId, setSessionId]);
+  }, [sessionId]);
   
   // Check session ID on load
   useEffect(() => {
     if (!sessionId) {
-      ensureSessionId();
+      console.warn('SettingsPopup opened without session ID');
     }
-  }, [sessionId, ensureSessionId]);
+  }, [sessionId]);
   
-  const [selectedProvider, setSelectedProvider] = useState(initialSettings?.provider || MODEL_PROVIDERS[0].name);
-  const [selectedModel, setSelectedModel] = useState(initialSettings?.model || MODEL_PROVIDERS[0].models[0].id);
+  const [selectedProvider, setSelectedProvider] = useState(initialSettings?.provider || 'anthropic');
+  const [selectedModel, setSelectedModel] = useState(initialSettings?.model || 'claude-sonnet-4-5-20250929');
   const [useCustomAPI, setUseCustomAPI] = useState(initialSettings?.hasCustomKey || false);
   const [apiKey, setApiKey] = useState(initialSettings?.apiKey || '');
   const [notification, setNotification] = useState<{type: 'success' | 'error', message: string} | null>(null);
@@ -46,7 +46,7 @@ const SettingsPopup: React.FC<SettingsPopupProps> = ({ isOpen, onClose, initialS
   
   // Convert string to number for temperature if needed
   const [temperature, setTemperature] = useState<number>(() => {
-    const defaultTemp = initialSettings?.temperature || 0;
+    const defaultTemp = initialSettings?.temperature || 1;
     return typeof defaultTemp === 'string' ? parseFloat(defaultTemp as string) : (defaultTemp as number);
   });
   
@@ -173,7 +173,7 @@ const SettingsPopup: React.FC<SettingsPopupProps> = ({ isOpen, onClose, initialS
             </label>
             <select
               value={selectedProvider}
-              onChange={(e) => setSelectedProvider(e.target.value)}
+              onChange={(e: React.ChangeEvent<HTMLSelectElement>) => setSelectedProvider(e.target.value)}
               className="w-full p-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-[#FF7F7F] focus:border-transparent bg-white"
             >
               {MODEL_PROVIDERS.map((provider) => (
@@ -213,7 +213,7 @@ const SettingsPopup: React.FC<SettingsPopupProps> = ({ isOpen, onClose, initialS
               type="checkbox"
               id="useCustomAPI"
               checked={useCustomAPI}
-              onChange={(e) => setUseCustomAPI(e.target.checked)}
+              onChange={(e: React.ChangeEvent<HTMLInputElement>) => setUseCustomAPI(e.target.checked)}
               className="rounded bg-white border-white text-[#FF7F7F] focus:ring-[#FF7F7F]"
             />
             <label htmlFor="useCustomAPI" className="text-sm font-medium text-gray-700">
@@ -267,10 +267,10 @@ const SettingsPopup: React.FC<SettingsPopupProps> = ({ isOpen, onClose, initialS
                 <input
                   type="range"
                   min="0"
-                  max="1"
+                  max="2"
                   step="0.1"
                   value={temperature}
-                  onChange={(e) => setTemperature(parseFloat(e.target.value))}
+                  onChange={(e: React.ChangeEvent<HTMLInputElement>) => setTemperature(parseFloat(e.target.value))}
                   className="w-full accent-[#FF7F7F]"
                 />
                 <div className="flex justify-between text-xs text-gray-500">

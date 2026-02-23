@@ -29,21 +29,10 @@ export async function loginUser(username: string, email: string, sessionId?: str
   return data;
 }
 
-export function getSessionId() {
-  // Check if code is running in browser environment
-  if (typeof window === 'undefined') {
-    return '';
-  }
-
-  // Get or create a session ID
-  let sessionId = localStorage.getItem('sessionId');
-  if (!sessionId) {
-    // Make sure uuidv4 is imported at the top of the file
-    sessionId = uuidv4();
-    localStorage.setItem('sessionId', sessionId);
-  }
-  
-  return sessionId;
+export function getSessionId(): string {
+  // Return existing sessionId from storage (set by useChatInput after auth)
+  return localStorage.getItem('auto-analyst-session-id') || 
+         sessionStorage.getItem('auto-analyst-session-id') || '';
 }
 
 export function getUserId() {

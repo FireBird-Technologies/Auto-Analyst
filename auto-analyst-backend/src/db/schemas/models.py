@@ -11,7 +11,7 @@ class User(Base):
     __tablename__ = 'users'
     
     user_id = Column(Integer, primary_key=True, autoincrement=True)
-    username = Column(String, unique=True, nullable=False)
+    username = Column(String, nullable=False)  # Removed unique=True
     email = Column(String, unique=True, nullable=False)
     created_at = Column(DateTime, default=lambda: datetime.now(UTC))
     # Add relationship for cascade options

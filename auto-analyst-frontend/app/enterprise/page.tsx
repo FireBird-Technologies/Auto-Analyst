@@ -208,7 +208,7 @@ export default function EnterprisePage() {
                         type="text"
                         required
                         value={formData.name}
-                        onChange={(e) => setFormData({...formData, name: e.target.value})}
+                        onChange={(e: React.ChangeEvent<HTMLInputElement>) => setFormData({...formData, name: e.target.value})}
                         className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#FF7F7F] focus:border-transparent text-black"
                       />
                     </div>
@@ -221,7 +221,7 @@ export default function EnterprisePage() {
                         type="email"
                         required
                         value={formData.email}
-                        onChange={(e) => setFormData({...formData, email: e.target.value})}
+                        onChange={(e: React.ChangeEvent<HTMLInputElement>) => setFormData({...formData, email: e.target.value})}
                         className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#FF7F7F] focus:border-transparent text-black"
                       />
                     </div>
@@ -234,7 +234,7 @@ export default function EnterprisePage() {
                         type="text"
                         required
                         value={formData.company}
-                        onChange={(e) => setFormData({...formData, company: e.target.value})}
+                        onChange={(e: React.ChangeEvent<HTMLInputElement>) => setFormData({...formData, company: e.target.value})}
                         className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#FF7F7F] focus:border-transparent text-black"
                       />
                     </div>
@@ -247,7 +247,7 @@ export default function EnterprisePage() {
                         type="text"
                         required
                         value={formData.budget}
-                        onChange={(e) => setFormData({...formData, budget: e.target.value})}
+                        onChange={(e: React.ChangeEvent<HTMLInputElement>) => setFormData({...formData, budget: e.target.value})}
                         className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#FF7F7F] focus:border-transparent text-black"
                         placeholder="Enter your budget"
                       />
@@ -260,7 +260,7 @@ export default function EnterprisePage() {
                       <textarea
                         required
                         value={formData.message}
-                        onChange={(e) => setFormData({...formData, message: e.target.value})}
+                        onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) => setFormData({...formData, message: e.target.value})}
                         rows={4}
                         className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#FF7F7F] focus:border-transparent text-black"
                         placeholder="Tell us about your needs..."

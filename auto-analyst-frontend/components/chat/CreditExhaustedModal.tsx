@@ -6,7 +6,6 @@ import { Button } from '@/components/ui/button'
 import { Lock, Crown, CreditCard } from 'lucide-react'
 import Link from 'next/link'
 // import config
-import { TrialUtils } from '@/lib/credits-config'
 
 interface CreditExhaustedModalProps {
   isOpen: boolean
@@ -40,7 +39,7 @@ export default function CreditExhaustedModal({
           <div className="space-y-3">
             <h5 className="font-semibold text-gray-900 text-base">Available options:</h5>
             <ul className="text-base text-gray-700 space-y-2 ml-4">
-              <li>• Start a {TrialUtils.getTrialDisplayText()} with {TrialUtils.getTrialCredits()} credits</li>
+              <li>• Upgrade to a paid plan for more credits</li>
               <li>• Upgrade to Standard plan for 500 credits/month</li>
               <li>• Contact us for enterprise plans</li>
             </ul>

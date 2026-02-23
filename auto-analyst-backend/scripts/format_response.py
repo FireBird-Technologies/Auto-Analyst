@@ -8,7 +8,7 @@ import logging
 from src.utils.logger import Logger
 import textwrap
 
-logger = Logger(__name__, level="INFO", see_time=False, console_log=False)
+logger = Logger(__name__, level=logging.INFO, see_time=False, console_log=False)
 
 @contextlib.contextmanager
 def stdoutIO(stdout=None):
@@ -44,20 +44,33 @@ API_KEY_PATTERNS = [
 ]
 
 # Network request patterns
-NETWORK_REQUEST_PATTERNS = re.compile(r"(requests\.|urllib\.|http\.|\.post\(|\.get\(|\.connect\()")
+NETWORK_REQUEST_PATTERNS = re.compile(r"(requests\.|urllib\.|http\.client|httpx\.|socket\.connect\()")
 
-def check_security_concerns(code_str):
+# DataFrame creation with hardcoded data - block only this specific pattern
+
+def check_security_concerns(code_str, dataset_names):
     """Check code for security concerns and return info about what was found"""
     security_concerns = {
         "has_concern": False,
-        "messages": [],
         "blocked_imports": False,
         "blocked_dynamic_imports": False,
         "blocked_env_access": False,
         "blocked_file_access": False,
         "blocked_api_keys": False,
-        "blocked_network": False
+        "blocked_network": False,
+        "blocked_dataframe_invention": False,  # Add this new field
+        "messages": []
     }
+
+    dataset_names_pattern = "|".join(re.escape(name) for name in dataset_names)
+    DATAFRAME_INVENTION_PATTERN = re.compile(
+                rf"({dataset_names_pattern})\s*=\s*pd\.DataFrame\s*\(\s*\{{\s*[^}}]*\}}", 
+                re.MULTILINE
+            )
+    if DATAFRAME_INVENTION_PATTERN.search(code_str):
+        security_concerns["has_concern"] = True
+        security_concerns["blocked_dataframe_invention"] = True
+        security_concerns["messages"].append(f"DataFrame creation blocked for dataset variables: {', '.join(dataset_names)}")
     
     # Check for sensitive imports
     if IMPORT_PATTERN.search(code_str) or FROM_IMPORT_PATTERN.search(code_str):
@@ -97,11 +110,19 @@ def check_security_concerns(code_str):
         security_concerns["blocked_network"] = True
         security_concerns["messages"].append("Network requests blocked")
     
+    
+    
     return security_concerns
 
-def clean_code_for_security(code_str, security_concerns):
+def clean_code_for_security(code_str, security_concerns, dataset_names):
     """Apply security modifications to the code based on detected concerns"""
+
     modified_code = code_str
+    dataset_names_pattern = "|".join(re.escape(name) for name in dataset_names)
+    DATAFRAME_INVENTION_PATTERN = re.compile(
+                rf"({dataset_names_pattern})\s*=\s*pd\.DataFrame\s*\(\s*\{{\s*[^}}]*\}}", 
+                re.MULTILINE
+            )
     
     # Block sensitive imports if needed
     if security_concerns["blocked_imports"]:
@@ -128,6 +149,13 @@ def clean_code_for_security(code_str, security_concerns):
     # Block network requests if needed
     if security_concerns["blocked_network"]:
         modified_code = NETWORK_REQUEST_PATTERNS.sub(r'"BLOCKED_NETWORK_REQUEST"', modified_code)
+    
+    # Block DataFrame creation with hardcoded data if detected
+    if security_concerns["blocked_dataframe_invention"]:
+        modified_code = DATAFRAME_INVENTION_PATTERN.sub(
+            r"# BLOCKED_DATAFRAME_INVENTION: \g<0>", 
+            modified_code
+        )
     
     # Add warning banner if needed
     if security_concerns["has_concern"]:
@@ -278,7 +306,7 @@ def format_code_block(code_str):
 def format_code_backticked_block(code_str):
     # Add None check at the beginning
     if code_str is None:
-        return 
+        return "```python\n# No code available\n```"  # Return empty code block instead of None
     
     # Add type check to ensure it's a string
     if not isinstance(code_str, str):
@@ -316,7 +344,7 @@ def format_code_backticked_block(code_str):
     return f'```python\n{code_clean}\n```'
 
     
-def execute_code_from_markdown(code_str, dataframe=None):
+def execute_code_from_markdown(code_str, datasets=None):
     import pandas as pd
     import plotly.express as px
     import plotly
@@ -330,11 +358,12 @@ def execute_code_from_markdown(code_str, dataframe=None):
     from io import StringIO, BytesIO
     import base64
 
+    context_names = list(datasets.keys())
     # Check for security concerns in the code
-    security_concerns = check_security_concerns(code_str)
+    security_concerns = check_security_concerns(code_str, context_names)
     
     # Apply security modifications to the code
-    modified_code = clean_code_for_security(code_str, security_concerns)
+    modified_code = clean_code_for_security(code_str, security_concerns, context_names)
     
     # Enhanced print function that detects and formats tabular data
     captured_outputs = []
@@ -562,8 +591,11 @@ def execute_code_from_markdown(code_str, dataframe=None):
     pd.DataFrame.__repr__ = custom_df_repr
 
     # If a dataframe is provided, add it to the context
-    if dataframe is not None:
-        context['df'] = dataframe
+    for dataset_name, dataset_df in datasets.items():
+        if dataset_df is not None:
+            context[dataset_name] = dataset_df
+            logger.log_message(f"Added dataset '{dataset_name}' to execution context", level=logging.DEBUG)
+
 
     # remove pd.read_csv() if it's already in the context
     modified_code = re.sub(r"pd\.read_csv\(\s*[\"\'].*?[\"\']\s*\)", '', modified_code)
@@ -596,12 +628,7 @@ def execute_code_from_markdown(code_str, dataframe=None):
         modified_code = re.sub(pattern, add_show, modified_code)
     
     # Only add df = pd.read_csv() if no dataframe was provided and the code contains pd.read_csv
-    if dataframe is None and 'pd.read_csv' not in modified_code:
-        modified_code = re.sub(
-            r'import pandas as pd',
-            r'import pandas as pd\n\n# Read Housing.csv\ndf = pd.read_csv("Housing.csv")',
-            modified_code
-        )
+
 
     # Identify code blocks by comments
     code_blocks = []
@@ -631,6 +658,12 @@ def execute_code_from_markdown(code_str, dataframe=None):
         try:
             # Clear captured outputs for each block
             captured_outputs.clear()
+            
+            # Fix indentation issues before execution
+            try:
+                block_code = textwrap.dedent(block_code)
+            except Exception as dedent_error:
+                logger.log_message(f"Failed to dedent code block '{block_name}': {str(dedent_error)}", level=logging.WARNING)
             
             with stdoutIO() as s:
                 exec(block_code, context)  # Execute the block
@@ -909,9 +942,13 @@ def format_plan_instructions(plan_instructions):
 
     return "\n".join(markdown_lines).strip()
     
+    # Return empty string if no complexity found
+    return ""
 
 def format_complexity(instructions):
     markdown_lines = []
+    complexity = None  # Initialize complexity to avoid UnboundLocalError
+    
     # Extract complexity from various possible locations in the structure
     if isinstance(instructions, dict):
         # Case 1: Direct complexity field
@@ -923,8 +960,12 @@ def format_complexity(instructions):
                 complexity = instructions['plan']['complexity']
         else:
             complexity = "unrelated"
-    
-    if 'plan' in instructions and isinstance(instructions['plan'], str) and "basic_qa_agent" in instructions['plan']:
+            
+        # Override for basic_qa_agent cases
+        if 'plan' in instructions and isinstance(instructions['plan'], str) and "basic_qa_agent" in instructions['plan']:
+            complexity = "unrelated"
+    else:
+        # If instructions is not a dict, default to unrelated
         complexity = "unrelated"
     
     if complexity:
@@ -949,10 +990,12 @@ def format_complexity(instructions):
         # Slightly larger display with pink styling
         markdown_lines.append(f"<div style='color: {color}; border: 2px solid {color}; padding: 2px 8px; border-radius: 12px; display: inline-block; font-size: 14.4px;'>{indicator} {complexity}</div>\n")
 
-        return "\n".join(markdown_lines).strip()    
+        return "\n".join(markdown_lines).strip()
+    
+    # Return empty string if no complexity found
+    return ""
 
-
-def format_response_to_markdown(api_response, agent_name = None, dataframe=None):
+def format_response_to_markdown(api_response, agent_name = None, datasets=None):
     try:
         markdown = []
         # logger.log_message(f"API response for {agent_name} at {time.strftime('%Y-%m-%d %H:%M:%S')}: {api_response}", level=logging.INFO)
@@ -978,26 +1021,34 @@ def format_response_to_markdown(api_response, agent_name = None, dataframe=None)
                 continue
                 
             if "complexity" in content:
-                markdown.append(f"{format_complexity(content)}\n")
+                complexity_result = format_complexity(content)
+                if complexity_result:  # Only append if not empty
+                    markdown.append(f"{complexity_result}")
                 
             markdown.append(f"\n## {agent.replace('_', ' ').title()}\n")
             
             if agent == "analytical_planner":
                 logger.log_message(f"Analytical planner content: {content}", level=logging.INFO)
-                if 'plan_desc' in content:
-                    markdown.append(f"### Reasoning\n{content['plan_desc']}\n")
+                if 'plan_desc' in content and content['plan_desc']:
+                    markdown.append(f"### Reasoning {content['plan_desc']}")
                 if 'plan_instructions' in content:
-                    markdown.append(f"{format_plan_instructions(content['plan_instructions'])}\n")
+                    plan_result = format_plan_instructions(content['plan_instructions'])
+                    if plan_result:  # Only append if not empty/None
+                        markdown.append(f"{plan_result}")
                 else:
-                    markdown.append(f"### Reasoning\n{content['rationale']}\n")
+                    if content.get('rationale'):
+                        markdown.append(f"### Reasoning {content['rationale']}")
             else:  
                 if "rationale" in content:
-                    markdown.append(f"### Reasoning\n{content['rationale']}\n")
+                    if content.get('rationale'):
+                        markdown.append(f"### Reasoning{content['rationale']}")
 
             if 'code' in content and content['code'] is not None:
-                markdown.append(f"### Code Implementation\n{format_code_backticked_block(content['code'])}\n")
-            if 'answer' in content:
-                markdown.append(f"### Answer\n{content['answer']}\n Please ask a query about the data")
+                formatted_code = format_code_backticked_block(content['code'])
+                if formatted_code:  # Check if formatted_code is not None
+                    markdown.append(f"### Code Implementation\n{formatted_code}\n")
+            if 'answer' in content and content['answer']:
+                markdown.append(f"### Answer{content['answer']} Please ask a query about the data")
             if 'summary' in content:
                 import re
                 summary_text = content['summary']
@@ -1033,11 +1084,11 @@ def format_response_to_markdown(api_response, agent_name = None, dataframe=None)
                     if content['refined_complete_code'] is not None and content['refined_complete_code'] != "":
                         clean_code = format_code_block(content['refined_complete_code']) 
                         markdown_code = format_code_backticked_block(content['refined_complete_code'])
-                        output, json_outputs, matplotlib_outputs = execute_code_from_markdown(clean_code, dataframe)
+                        output, json_outputs, matplotlib_outputs = execute_code_from_markdown(clean_code, datasets)
                     elif "```python" in content['summary']:
                         clean_code = format_code_block(content['summary'])
                         markdown_code = format_code_backticked_block(content['summary'])
-                        output, json_outputs, matplotlib_outputs = execute_code_from_markdown(clean_code, dataframe)
+                        output, json_outputs, matplotlib_outputs = execute_code_from_markdown(clean_code, datasets)
                 except Exception as e:
                     logger.log_message(f"Error in execute_code_from_markdown: {str(e)}", level=logging.ERROR)
                     markdown_code = f"**Error**: {str(e)}"
@@ -1084,29 +1135,3 @@ def format_response_to_markdown(api_response, agent_name = None, dataframe=None)
     return '\n'.join(markdown)
 
 
-# Example usage with dummy data
-if __name__ == "__main__":
-    sample_response = {
-        "code_combiner_agent": {
-            "reasoning": "Sample reasoning for multiple charts.",
-            "refined_complete_code": """
-```python
-import plotly.express as px
-import pandas as pd
-
-# Sample Data
-df = pd.DataFrame({'Category': ['A', 'B', 'C'], 'Values': [10, 20, 30]})
-
-# First Chart
-fig = px.bar(df, x='Category', y='Values', title='Bar Chart')
-fig.show()
-
-# Second Chart
-fig2 = px.pie(df, values='Values', names='Category', title='Pie Chart')
-fig2.show()
-```
-"""
-        }
-    }
-
-    formatted_md = format_response_to_markdown(sample_response)

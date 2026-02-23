@@ -408,7 +408,7 @@ export default function AccountPage() {
   const executeCancellation = async () => {
     setIsRefreshing(true)
     try {
-      const response = await fetch('/api/trial/cancel', {
+      const response = await fetch('/api/user/cancel-subscription', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -427,7 +427,7 @@ export default function AccountPage() {
       
       toast({
         title: 'Subscription canceled',
-        description: result.message || 'Your subscription has been canceled',
+        description: result.message + (result.periodEndDate ? ` Your access continues until ${new Date(result.periodEndDate).toLocaleDateString()}.` : ''),
         duration: 5000
       })
     } catch (error) {
@@ -1006,7 +1006,7 @@ export default function AccountPage() {
               <AlertDialogTitle>Cancel your subscription?</AlertDialogTitle>
               <AlertDialogDescription>
                 Your subscription will remain active until the end of your current billing period.
-                After that, your account will be downgraded to the Free plan with 100 credits per month.
+                After that, your account will be downgraded to the Free plan
               </AlertDialogDescription>
             </AlertDialogHeader>
             <AlertDialogFooter>

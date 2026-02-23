@@ -6,18 +6,28 @@ import logging
 import pandas as pd
 from typing import Dict, Any, List
 
+from fastapi import HTTPException
 from llama_index.core import Document, VectorStoreIndex
 from src.utils.logger import Logger
 from src.managers.user_manager import get_current_user
-from src.agents.agents import auto_analyst
+from src.agents.agents import auto_analyst, dataset_description_agent, data_context_gen
 from src.agents.retrievers.retrievers import make_data
 from src.managers.chat_manager import ChatManager
+from src.utils.model_registry import mid_lm
 from dotenv import load_dotenv
+import duckdb
+import dspy
+from src.utils.dataset_description_generator import generate_dataset_description
+from fastapi import Request
 
 load_dotenv()
 
 # Initialize logger
 logger = Logger("session_manager", see_time=False, console_log=False)
+
+# Helper to clamp temperature to valid range
+def _get_clamped_temperature():
+    return min(1.0, max(0.0, float(os.getenv("TEMPERATURE", "1.0"))))
 
 class SessionManager:
     """
@@ -39,9 +49,11 @@ class SessionManager:
         self._default_retrievers = None
         self._default_ai_system = None
         self._make_data = None
+
         # Initialize chat manager
-        self._dataset_description = "Housing Dataset"
+
         self._default_name = "Housing.csv"
+
         
         self._dataset_description = """This dataset contains residential property information with details about pricing, physical characteristics, and amenities. The data can be used for real estate market analysis, property valuation, and understanding the relationship between house features and prices.
 
@@ -82,7 +94,6 @@ Data Handling Recommendations:
 
 This dataset appears clean with consistent formatting and no missing values, making it suitable for immediate analysis with appropriate categorical encoding.
         """
-        self.styling_instructions = styling_instructions
         self.available_agents = available_agents
         self.chat_manager = ChatManager(db_url=os.getenv("DATABASE_URL"))
         
@@ -92,7 +103,7 @@ This dataset appears clean with consistent formatting and no missing values, mak
         """Initialize the default dataset and store it"""
         try:
             self._default_df = pd.read_csv("Housing.csv")
-            self._make_data = make_data(self._default_df, self._dataset_description)
+            self._make_data = {'dataset_python_name':"this dataset is loaded as `df`","description":self._dataset_description}
             self._default_retrievers = self.initialize_retrievers(self.styling_instructions, [str(self._make_data)])
             # Create default AI system - agents will be loaded from database
             self._default_ai_system = auto_analyst(agents=[], retrievers=self._default_retrievers)
@@ -100,21 +111,11 @@ This dataset appears clean with consistent formatting and no missing values, mak
             logger.log_message(f"Error initializing default dataset: {str(e)}", level=logging.ERROR)
             raise e
     
-    def initialize_retrievers(self, styling_instructions: List[str], doc: List[str]):
-        """
-        Initialize retrievers for styling and data
-        
-        Args:
-            styling_instructions: List of styling instructions
-            doc: List of document strings
-            
-        Returns:
-            Dictionary containing style_index and dataframe_index
-        """
+    def initialize_retrievers(self,styling_instructions: List[str], doc: List[str]):
         try:
             style_index = VectorStoreIndex.from_documents([Document(text=x) for x in styling_instructions])
-            data_index = VectorStoreIndex.from_documents([Document(text=x) for x in doc])
-            return {"style_index": style_index, "dataframe_index": data_index}
+            
+            return {"style_index": style_index, "dataframe_index": doc}
         except Exception as e:
             logger.log_message(f"Error initializing retrievers: {str(e)}", level=logging.ERROR)
             raise e
@@ -136,9 +137,9 @@ This dataset appears clean with consistent formatting and no missing values, mak
         else:
             default_model_config = {
                 "provider": os.getenv("MODEL_PROVIDER", "anthropic"),
-                "model": os.getenv("MODEL_NAME", "claude-opus-4-5-20251101"),
+                "model": os.getenv("MODEL_NAME", "claude-sonnet-4-5-20250929"),
                 "api_key": os.getenv("ANTHROPIC_API_KEY"),
-                "temperature": float(os.getenv("TEMPERATURE", 1.0)),
+                "temperature": _get_clamped_temperature(),
                 "max_tokens": int(os.getenv("MAX_TOKENS", 6000))
             }
         
@@ -146,16 +147,21 @@ This dataset appears clean with consistent formatting and no missing values, mak
             # Check if we need to create a brand new session
             logger.log_message(f"Creating new session state for session_id: {session_id}", level=logging.INFO)
             
+            # Initialize DuckDB connection for this session
+
+            
             # Initialize with default state
             self._sessions[session_id] = {
-                "current_df": self._default_df.copy() if self._default_df is not None else None,
+                "datasets": {"df":self._default_df.copy() if self._default_df is not None else None},
+                "dataset_names": ["df"],
                 "retrievers": self._default_retrievers,
                 "ai_system": self._default_ai_system,
                 "make_data": self._make_data,
                 "description": self._dataset_description,
                 "name": self._default_name,
                 "model_config": default_model_config,
-                "creation_time": time.time()
+                "creation_time": time.time(),
+                "duckdb_conn": None,
             }
         else:
             # Verify dataset integrity in existing session
@@ -165,9 +171,9 @@ This dataset appears clean with consistent formatting and no missing values, mak
             session["model_config"] = default_model_config
             
             # If dataset is somehow missing, restore it
-            if "current_df" not in session or session["current_df"] is None:
+            if "datasets" not in session or session["datasets"] is None:
                 logger.log_message(f"Restoring missing dataset for session {session_id}", level=logging.WARNING)
-                session["current_df"] = self._default_df.copy() if self._default_df is not None else None
+                session["datasets"] = {"df":self._default_df.copy() if self._default_df is not None else None}
                 session["retrievers"] = self._default_retrievers
                 session["ai_system"] = self._default_ai_system
                 session["description"] = self._dataset_description
@@ -184,29 +190,41 @@ This dataset appears clean with consistent formatting and no missing values, mak
             
         return self._sessions[session_id]
 
-    def clear_session_state(self, session_id: str):
-        """
-        Clear session-specific state
-        
-        Args:
-            session_id: The session identifier
-        """
-        if session_id in self._sessions:
-            del self._sessions[session_id]
+   
 
 
-    def update_session_dataset(self, session_id: str, df, name: str, desc: str):
+    def update_session_dataset(self, session_id: str, datasets, names, desc: str, pre_generated=False):
         """
-        Update dataset for a specific session
-
-        Args:
-            session_id: The session identifier
-            df: Pandas DataFrame containing the dataset
-            name: Name of the dataset
-            desc: Description of the dataset
+        Update session with new dataset and optionally auto-generate description
         """
         try:
-            self._make_data = make_data(df, desc)
+            # Get default model config for new sessions
+            default_model_config = {
+                "provider": os.getenv("MODEL_PROVIDER", "anthropic"),
+                "model": os.getenv("MODEL_NAME", "claude-sonnet-4-5-20250929"),
+                "api_key": os.getenv("ANTHROPIC_API_KEY"),
+                "temperature": _get_clamped_temperature(),
+                "max_tokens": int(os.getenv("MAX_TOKENS", 6000))
+            }
+            
+            # Get or create DuckDB connection for this session
+            
+            # Register the new dataset in DuckDB
+            
+            # Auto-generate description if we have datasets
+            if datasets and pre_generated==False:
+                try:
+                    generated_desc = generate_dataset_description(datasets, desc, names)
+                    desc = generated_desc  # No need to format again since it's already formatted
+                    logger.log_message(f"Auto-generated description for session {session_id}", level=logging.INFO)
+                except Exception as e:
+                    logger.log_message(f"Failed to auto-generate description: {str(e)}", level=logging.WARNING)
+                    # Keep the original description if generation fails
+                    pass
+            
+            # Initialize retrievers and AI system BEFORE creating session_state
+            # Update make_data with the description
+            self._make_data = {'description': desc}
             retrievers = self.initialize_retrievers(self.styling_instructions, [str(self._make_data)])
             
             # Check if session has a user_id to create user-specific AI system
@@ -216,25 +234,17 @@ This dataset appears clean with consistent formatting and no missing values, mak
             
             ai_system = self.create_ai_system_for_user(retrievers, current_user_id)
             
-            # Get default model config for new sessions
-            default_model_config = {
-                "provider": os.getenv("MODEL_PROVIDER", "anthropic"),
-                "model": os.getenv("MODEL_NAME", "claude-opus-4-5-20251101"),
-                "api_key": os.getenv("ANTHROPIC_API_KEY"),
-                "temperature": float(os.getenv("TEMPERATURE", 1.0)),
-                "max_tokens": int(os.getenv("MAX_TOKENS", 6000))
-            }
-            
             # Create a completely fresh session state for the new dataset
-            # This ensures no remnants of the previous dataset remain
             session_state = {
-                "current_df": df,
-                "retrievers": retrievers,
-                "ai_system": ai_system,
+                "datasets": datasets,
+                "dataset_names": names,
+                "retrievers": retrievers,  # Now retrievers is defined
+                "ai_system": ai_system,    # Now ai_system is defined
                 "make_data": self._make_data,
                 "description": desc,
-                "name": name,
-                "model_config": default_model_config,  # Initialize with default
+                "name": names[0],
+                "duckdb_conn": None,
+                "model_config": default_model_config,
             }
             
             # Preserve user_id, chat_id, and model_config if they exist in the current session
@@ -244,13 +254,12 @@ This dataset appears clean with consistent formatting and no missing values, mak
                 if "chat_id" in self._sessions[session_id]:
                     session_state["chat_id"] = self._sessions[session_id]["chat_id"]
                 if "model_config" in self._sessions[session_id]:
-                    # Preserve the user's model configuration
                     session_state["model_config"] = self._sessions[session_id]["model_config"]
             
             # Replace the entire session with the new state
             self._sessions[session_id] = session_state
             
-            logger.log_message(f"Updated session {session_id} with completely fresh dataset state: {name}", level=logging.INFO)
+            logger.log_message(f"Updated session {session_id} with completely fresh dataset state: {str(names)}", level=logging.INFO)
         except Exception as e:
             logger.log_message(f"Error updating dataset for session {session_id}: {str(e)}", level=logging.ERROR)
             raise e
@@ -266,9 +275,9 @@ This dataset appears clean with consistent formatting and no missing values, mak
             # Get default model config from environment
             default_model_config = {
                 "provider": os.getenv("MODEL_PROVIDER", "anthropic"),
-                "model": os.getenv("MODEL_NAME", "claude-opus-4-5-20251101"),
+                "model": os.getenv("MODEL_NAME", "claude-sonnet-4-5-20250929"),
                 "api_key": os.getenv("ANTHROPIC_API_KEY"),
-                "temperature": float(os.getenv("TEMPERATURE", 1.0)),
+                "temperature": _get_clamped_temperature(),
                 "max_tokens": int(os.getenv("MAX_TOKENS", 6000))
             }
             
@@ -277,15 +286,19 @@ This dataset appears clean with consistent formatting and no missing values, mak
                 del self._sessions[session_id]
                 logger.log_message(f"Cleared existing state for session {session_id} before reset.", level=logging.INFO)
 
+            # Create new DuckDB connection for default session
+
             # Initialize with default state
             self._sessions[session_id] = {
-                "current_df": self._default_df.copy(), # Use a copy
+                "datasets": {'df':self._default_df.copy()},
+                "dataset_names": ["df"], # Use a copy
                 "retrievers": self._default_retrievers,
                 "ai_system": self._default_ai_system,
                 "description": self._dataset_description,
                 "name": self._default_name, # Explicitly set the default name
                 "make_data": None, # Clear any custom make_data
-                "model_config": default_model_config # Initialize with default model config
+                "model_config": default_model_config, # Initialize with default model config
+                "duckdb_conn": None, # Create new DuckDB connection
             }
             logger.log_message(f"Reset session {session_id} to default dataset: {self._default_name}", level=logging.INFO)
         except Exception as e:
@@ -331,6 +344,77 @@ This dataset appears clean with consistent formatting and no missing values, mak
             # Fallback to standard AI system
             return auto_analyst(agents=[], retrievers=retrievers)
 
+    def set_default_lm_for_user(self, session_id: str, user_id: int = None):
+        """
+        Set the default language model for a user upon signin using MODEL_OBJECTS.
+        
+        Args:
+            session_id: The session identifier
+            user_id: The authenticated user ID (optional)
+            
+        Returns:
+            Dictionary containing the default model configuration
+        """
+        try:
+            # Import MODEL_OBJECTS directly
+            from src.utils.model_registry import MODEL_OBJECTS
+            
+            # Set Claude Sonnet 4.5 as default model
+            default_model_name = "claude-sonnet-4-5-20250929"
+            
+            # Ensure the model exists in MODEL_OBJECTS
+            if default_model_name not in MODEL_OBJECTS:
+                logger.log_message(f"Default model '{default_model_name}' not found in MODEL_OBJECTS, using gpt-5-mini", level=logging.WARNING)
+                default_model_name = "gpt-5-mini"
+            
+            # Get the model object directly from MODEL_OBJECTS
+            model_object = MODEL_OBJECTS[default_model_name]
+            
+            # Determine provider from model name
+            provider = "anthropic"  # Claude models use Anthropic
+            
+            # Create default model configuration
+            default_model_config = {
+                "provider": provider,
+                "model": default_model_name,
+                "api_key": os.getenv(f"{provider.upper()}_API_KEY"),
+                "temperature": getattr(model_object, 'kwargs', {}).get('temperature', 0.7),
+                "max_tokens": getattr(model_object, 'kwargs', {}).get('max_tokens', 4000)
+            }
+            
+            # Ensure we have a session state for this session ID
+            if session_id not in self._sessions:
+                self.get_session_state(session_id)
+            
+            # Set the default model configuration in session state
+            self._sessions[session_id]["model_config"] = default_model_config
+            
+            # Also update the app-level model config if available
+            if hasattr(self, '_app_model_config'):
+                self._app_model_config.update(default_model_config)
+            
+            logger.log_message(f"Set default LM '{default_model_name}' for session {session_id} (user: {user_id})", level=logging.INFO)
+            
+            return {
+                "status": "success",
+                "model_config": default_model_config,
+                "message": f"Default model '{default_model_name}' set successfully"
+            }
+            
+        except Exception as e:
+            logger.log_message(f"Error setting default LM for user {user_id}: {str(e)}", level=logging.ERROR)
+            # Return fallback configuration
+            return {
+                "status": "error",
+                "model_config": {
+                    "provider": "anthropic",
+                    "model": "claude-sonnet-4-5-20250929",
+                    "temperature": 0.7,
+                    "max_tokens": 4000
+                },
+                "message": f"Failed to set default model, using fallback: {str(e)}"
+            }
+
     def set_session_user(self, session_id: str, user_id: int, chat_id: int = None):
         """
         Associate a user with a session
@@ -349,6 +433,9 @@ This dataset appears clean with consistent formatting and no missing values, mak
         
         # Store user ID
         self._sessions[session_id]["user_id"] = user_id
+        
+        # Set default LM for user upon signin
+        self.set_default_lm_for_user(session_id, user_id)
         
         # Generate or use chat ID
         if chat_id:
@@ -376,32 +463,35 @@ This dataset appears clean with consistent formatting and no missing values, mak
             # Continue with existing AI system if update fails
         
         # Make sure this data gets saved
-        logger.log_message(f"Associated session {session_id} with user_id={user_id}, chat_id={chat_id_to_use}", level=logging.INFO)
+        logger.log_message(f"Associated session {session_id} with user {user_id}, chat_id: {chat_id_to_use}", level=logging.INFO)
         
         # Return the updated session data
         return self._sessions[session_id]
 
-async def get_session_id(request, session_manager):
+async def get_session_id(request: Request, session_manager):
     """
-    Get the session ID from the request, create/associate a user if needed
-    
-    Args:
-        request: FastAPI Request object
-        session_manager: SessionManager instance
-        
-    Returns:
-        Session ID string
+    Get or create a session ID from the request
     """
-    # First try to get from query params
-    session_id = request.query_params.get("session_id")
+    # Debug: Log all headers
+    logger.log_message(f"🔍 ALL REQUEST HEADERS: {dict(request.headers)}", level=logging.DEBUG)
     
-    # If not in query params, try to get from headers
-    if not session_id:
-        session_id = request.headers.get("X-Session-ID")
+    # Try to get session ID from headers FIRST (primary method)
+    session_id = request.headers.get("X-Session-ID")
+    logger.log_message(f"🔍 Session ID from X-Session-ID header: {session_id}", level=logging.DEBUG)
     
-    # If still not found, generate a new one
+    # If not in headers, try query parameters (fallback for backward compatibility)
     if not session_id:
-        session_id = str(uuid.uuid4())
+        session_id = request.query_params.get("session_id")
+        logger.log_message(f"🔍 Session ID from query params: {session_id}", level=logging.DEBUG)
+    
+    logger.log_message(f"🔍 Final session_id before validation: '{session_id}' (type: {type(session_id)})", level=logging.DEBUG)
+    
+    # STOP auto-generating sessions
+    if not session_id:
+        logger.log_message(f"❌ No session ID found in request", level=logging.ERROR)
+        raise HTTPException(status_code=400, detail="Session ID required")
+    else:
+        logger.log_message(f"✅ Using existing session ID: {session_id}", level=logging.INFO)
     
     # Get or create the session state
     session_state = session_manager.get_session_state(session_id)

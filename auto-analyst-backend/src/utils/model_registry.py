@@ -10,7 +10,12 @@ PROVIDERS = {
 }
 max_tokens = int(os.getenv("MAX_TOKENS", 6000))
 
+# Clamp temperature to valid range (0..1) for all models
+default_temperature = min(1.0, max(0.0, float(os.getenv("TEMPERATURE", "1.0"))))
+
 small_lm = dspy.LM('openai/gpt-4o-mini',max_tokens=300,api_key=os.getenv("OPENAI_API_KEY"), cache=False)
+
+mid_lm = dspy.LM('openai/gpt-4o-mini',max_tokens=1800,api_key=os.getenv("OPENAI_API_KEY"), cache=False)
 
 gpt_4o_mini = dspy.LM('openai/gpt-4o-mini',max_tokens=4000,api_key=os.getenv("OPENAI_API_KEY"), cache=False)
 
@@ -20,27 +25,27 @@ gpt_4o_mini = dspy.LM('openai/gpt-4o-mini',max_tokens=4000,api_key=os.getenv("OP
 gpt_5_mini = dspy.LM(
     model="openai/gpt-5-mini",
     api_key=os.getenv("OPENAI_API_KEY"),
-    temperature=float(os.getenv("TEMPERATURE", 1.0)),
-    max_tokens= None,
-    max_completion_tokens=max_tokens,
+    temperature=default_temperature,
+    max_tokens= 16_000,
+    # max_completion_tokens=max_tokens,
     cache=False
 )
 
 gpt_5 = dspy.LM(
     model="openai/gpt-5",
     api_key=os.getenv("OPENAI_API_KEY"),
-    temperature=float(os.getenv("TEMPERATURE", 1.0)),
-        max_tokens= None,
-    max_completion_tokens=max_tokens,  # Use max_completion_tokens for gpt-5
+    temperature=default_temperature,
+    max_tokens= 16_000,
+    # max_completion_tokens=max_tokens,  # Use max_completion_tokens for gpt-5
     cache=False
 )
 
 gpt_5_nano = dspy.LM(
     model="openai/gpt-5-nano",
     api_key=os.getenv("OPENAI_API_KEY"),
-    temperature=float(os.getenv("TEMPERATURE", 1.0)),
-        max_tokens= None,
-    max_completion_tokens=max_tokens,
+    temperature=default_temperature,
+    max_tokens= 16_000,
+    # max_completion_tokens=max_tokens,
     cache=False
 )
 
@@ -98,7 +103,7 @@ o1_mini = dspy.LM(
 o3 = dspy.LM(
     model="openai/o3-2025-04-16",
     api_key=os.getenv("OPENAI_API_KEY"),
-    temperature=float(os.getenv("TEMPERATURE", 1.0)),
+    temperature=default_temperature,
     max_tokens=20_000,
     cache=False
 )
@@ -106,16 +111,32 @@ o3 = dspy.LM(
 o3_mini = dspy.LM(
     model="openai/o3-mini",
     api_key=os.getenv("OPENAI_API_KEY"),
-    temperature=float(os.getenv("TEMPERATURE", 1.0)),
+    temperature=default_temperature,
     max_tokens=20_000,
     cache=False
 )
+
+claude_4_5_sonnet_latest = dspy.LM(
+    model="anthropic/claude-sonnet-4-5-20250929",
+    api_key=os.getenv("ANTHROPIC_API_KEY"),
+    temperature=default_temperature,
+    max_tokens=max_tokens,
+    cache=False
+) 
 
 # Anthropic models
 claude_3_5_haiku_latest = dspy.LM(
     model="anthropic/claude-3-5-haiku-latest",
     api_key=os.getenv("ANTHROPIC_API_KEY"),
-    temperature=float(os.getenv("TEMPERATURE", 1.0)),
+    temperature=default_temperature,
+    max_tokens=max_tokens,
+    cache=False
+)
+
+claude_3_7_sonnet_latest = dspy.LM(
+    model="anthropic/claude-3-7-sonnet-latest",
+    api_key=os.getenv("ANTHROPIC_API_KEY"),
+    temperature=default_temperature,
     max_tokens=max_tokens,
     cache=False
 )
@@ -123,7 +144,7 @@ claude_3_5_haiku_latest = dspy.LM(
 claude_3_5_sonnet_latest = dspy.LM(
     model="anthropic/claude-3-5-sonnet-latest",
     api_key=os.getenv("ANTHROPIC_API_KEY"),
-    temperature=float(os.getenv("TEMPERATURE", 1.0)),
+    temperature=default_temperature,
     max_tokens=max_tokens,
     cache=False
 )
@@ -131,7 +152,7 @@ claude_3_5_sonnet_latest = dspy.LM(
 claude_sonnet_4_20250514 = dspy.LM(
     model="anthropic/claude-sonnet-4-20250514",
     api_key=os.getenv("ANTHROPIC_API_KEY"),
-    temperature=float(os.getenv("TEMPERATURE", 1.0)),
+    temperature=default_temperature,
     max_tokens=max_tokens,
     cache=False
 )
@@ -139,7 +160,7 @@ claude_sonnet_4_20250514 = dspy.LM(
 claude_3_opus_latest = dspy.LM(
     model="anthropic/claude-3-opus-latest",
     api_key=os.getenv("ANTHROPIC_API_KEY"),
-    temperature=float(os.getenv("TEMPERATURE", 1.0)),
+    temperature=default_temperature,
     max_tokens=max_tokens,
     cache=False
 )
@@ -147,7 +168,7 @@ claude_3_opus_latest = dspy.LM(
 claude_opus_4_20250514 = dspy.LM(
     model="anthropic/claude-opus-4-20250514",
     api_key=os.getenv("ANTHROPIC_API_KEY"),
-    temperature=float(os.getenv("TEMPERATURE", 1.0)),
+    temperature=default_temperature,
     max_tokens=max_tokens,
     cache=False
 )
@@ -171,7 +192,7 @@ claude_opus_4_5 = dspy.LM(
 claude_sonnet_4_5 = dspy.LM(
     model="anthropic/claude-sonnet-4-5-20250929",
     api_key=os.getenv("ANTHROPIC_API_KEY"),
-    temperature=float(os.getenv("TEMPERATURE", 1.0)),
+    temperature=default_temperature,
     max_tokens=max_tokens,
     cache=False
 )
@@ -180,7 +201,7 @@ claude_sonnet_4_5 = dspy.LM(
 deepseek_r1_distill_llama_70b = dspy.LM(
     model="groq/deepseek-r1-distill-llama-70b",
     api_key=os.getenv("GROQ_API_KEY"),
-    temperature=float(os.getenv("TEMPERATURE", 1.0)),
+    temperature=default_temperature,
     max_tokens=max_tokens,
     cache=False
 )
@@ -188,7 +209,7 @@ deepseek_r1_distill_llama_70b = dspy.LM(
 gpt_oss_120B = dspy.LM(
     model="groq/gpt-oss-120B",
     api_key=os.getenv("GROQ_API_KEY"),
-    temperature=float(os.getenv("TEMPERATURE", 1.0)),
+    temperature=default_temperature,
     max_tokens=max_tokens,
     cache=False
 )
@@ -196,7 +217,7 @@ gpt_oss_120B = dspy.LM(
 gpt_oss_20B = dspy.LM(
     model="groq/gpt-oss-20B",
     api_key=os.getenv("GROQ_API_KEY"),
-    temperature=float(os.getenv("TEMPERATURE", 1.0)),
+    temperature=default_temperature,
     max_tokens=max_tokens,
     cache=False
 )
@@ -204,7 +225,7 @@ gpt_oss_20B = dspy.LM(
 gemini_2_5_pro_preview_03_25 = dspy.LM(
     model="gemini/gemini-2.5-pro-preview-03-25",
     api_key=os.getenv("GEMINI_API_KEY"),
-    temperature=float(os.getenv("TEMPERATURE", 1.0)),
+    temperature=default_temperature,
     max_tokens=max_tokens,
     cache=False
 )
@@ -242,12 +263,13 @@ MODEL_OBJECTS = {
     
     # Anthropic models
     "claude-3-5-haiku-latest": claude_3_5_haiku_latest,
+    "claude-3-7-sonnet-latest": claude_3_7_sonnet_latest,
     "claude-3-5-sonnet-latest": claude_3_5_sonnet_latest,
     "claude-sonnet-4-20250514": claude_sonnet_4_20250514,
-    "claude-sonnet-4-5-20250929": claude_sonnet_4_5,
+    "claude-sonnet-4-5-20250929": claude_4_5_sonnet_latest,
     "claude-3-opus-latest": claude_3_opus_latest,
     "claude-opus-4-20250514": claude_opus_4_20250514,
-    "claude-opus-4-1-20250805": claude_opus_4_1,
+    "claude-opus-4-1": claude_opus_4_1,
     "claude-opus-4-5-20251101": claude_opus_4_5,
     
     # Groq models
@@ -316,7 +338,8 @@ MODEL_TIERS = {
             "o1-pro",
             "claude-3-opus-latest",
             "claude-opus-4-20250514",
-            "claude-opus-4-1-20250805",
+            "claude-sonnet-4-5-20250929",
+            "gpt-5",
             "gpt-5.2",
             "gemini-3-pro"
         ]
@@ -325,7 +348,6 @@ MODEL_TIERS = {
         "name": "Ultimate",
         "credits": 50,
         "models": [
-            "gpt-5",
             "gpt-5.2-pro",
             "claude-opus-4-5-20251101"
         ]
@@ -354,7 +376,7 @@ MODEL_METADATA = {
     "claude-sonnet-4-20250514": {"display_name": "Claude Sonnet 4", "context_window": 200000},
     "claude-sonnet-4-5-20250929": {"display_name": "Claude Sonnet 4.5", "context_window": 200000},
     "claude-opus-4-20250514": {"display_name": "Claude Opus 4", "context_window": 200000},
-    "claude-opus-4-1-20250805": {"display_name": "Claude Opus 4.1", "context_window": 200000},
+    "claude-opus-4-1": {"display_name": "Claude Opus 4.1", "context_window": 200000},
     "claude-opus-4-5-20251101": {"display_name": "Claude Opus 4.5", "context_window": 200000},
 
     # GROQ
@@ -389,8 +411,9 @@ MODEL_COSTS = {
         "claude-sonnet-4-5-20250929": {"input": 0.003, "output": 0.015},
         "claude-3-opus-latest": {"input": 0.015, "output": 0.075},  
         "claude-opus-4-20250514": {"input": 0.015, "output": 0.075},
-        "claude-opus-4-1-20250805": {"input": 0.015, "output": 0.075},
+        "claude-opus-4-1": {"input": 0.015, "output": 0.075},
         "claude-opus-4-5-20251101": {"input": 0.015, "output": 0.075},
+        "claude-sonnet-4-5-20250929": {"input": 0.003, "output": 0.015},
     },
     "groq": {
         "deepseek-r1-distill-llama-70b": {"input": 0.00075, "output": 0.00099},

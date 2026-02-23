@@ -17,6 +17,8 @@ import textwrap
 import os
 from src.schemas.code_schema import CodeExecuteRequest, CodeEditRequest, CodeFixRequest, CodeCleanRequest, GetLatestCodeRequest
 from src.utils.model_registry import MODEL_OBJECTS
+import asyncio
+import traceback
 
 def clean_print_statements(code_block):
     """
@@ -61,56 +63,41 @@ logger = Logger("code_routes", see_time=True, console_log=False)
 try_logger = Logger("try_code_routes", see_time=True, console_log=False)
 
 
-def score_code(args, code):
+def score_code(args, code, datasets=None):
     """
     Simple code scorer that checks if code runs successfully.
+    Handles both deep analysis (combined_code) and fix (fixed_code) scenarios.
     
     Args:
         args: Arguments (unused but required for dspy.Refine)
-        code: Code object with combined_code attribute
-        
+        code: Code object with combined_code, fixed_code, or string content
+        datasets: Dictionary of datasets from session state (optional)
+    
     Returns:
         int: Score (0=error, 1=success)
     """
-    code_text = code.fixed_code
     try:
-        # Fix try statement syntax
-        code_text = code_text.replace('try\n', 'try:\n')
-        code_text = code_text.replace('```python', '').replace('```', '')
+        # Handle different attribute names based on context
+        if hasattr(code, 'combined_code'):
+            code_to_execute = code.combined_code  # Deep analysis
+        elif hasattr(code, 'fixed_code'):
+            code_to_execute = code.fixed_code     # Code fix
+        else:
+            code_to_execute = str(code)           # Fallback to string
         
-        # Remove code patterns that would make the code unrunnable
-        invalid_patterns = [
-            '```', '\\n', '\\t', '\\r'
-        ]
-        
-        for pattern in invalid_patterns:
-            if pattern in code_text:
-                code_text = code_text.replace(pattern, '')
-
-        # Remove .show() method calls to prevent blocking
-        cleaned_code = re.sub(r"plt\.show\(\).*?(\n|$)", '', code_text)
-        cleaned_code = re.sub(r'\.show\([^)]*\)', '', cleaned_code)
-            
-        cleaned_code = remove_main_block(cleaned_code)
-        
-        # Execute code in a new namespace
+        # Make datasets available if provided
         local_vars = {}
-        exec(cleaned_code, globals(), local_vars)
-        
-        # If we get here, code executed successfully
-        return 1
-    
+        if datasets:
+            local_vars.update(datasets)
+            
+        # Execute the code to test if it works
+        exec(code_to_execute, local_vars)
+        return 1  # Success
     except Exception as e:
-        return 0
+        return 0  # Error
    
 
-refine_fixer = dspy.Refine(
-    module=dspy.ChainOfThought(code_fix), 
-    N=3,
-    threshold=1.0,
-    reward_fn=score_code, 
-    fail_count=3
-)
+# Remove the global refine_fixer declaration
 
 
 def format_code(code: str) -> str:
@@ -287,34 +274,31 @@ def extract_relevant_error_section(error_message: str) -> str:
     # If the error is short enough, return as is
     return error_message
 
-async def fix_code_with_dspy(code: str, error: str, dataset_context: str = ""):
+async def fix_code_with_dspy(code: str, error: str, dataset_context: str = "", datasets: dict = None):
     """
-    Fix code with errors by identifying faulty blocks and fixing them individually using async refine
-    
-    Args:
-        code (str): The code containing errors
-        error (str): Error message from execution
-        dataset_context (str): Context about the dataset
+    Fix code using DSPy Refine with datasets-aware reward function
+    """
+    try:
+        # Wrap score_code to fix datasets argument
+        reward_fn_with_datasets = lambda args, pred: score_code(args, pred, datasets=datasets)
+
+        refine_fixer = dspy.Refine(
+            module=dspy.Predict(code_fix),
+            N=3,
+            threshold=1.0,
+            reward_fn=reward_fn_with_datasets,
+            fail_count=3
+        )
         
-    Returns:
-        str: The fixed code
-    """
-    import asyncio
-    
-    # Check if we have valid API key
-    anthropic_key = os.environ.get('ANTHROPIC_API_KEY')
-    if not anthropic_key:
-        raise ValueError("ANTHROPIC_API_KEY environment variable is not set")
-    
-    # Find the blocks with errors
-    faulty_blocks = identify_error_blocks(code, error)
-    
-    if not faulty_blocks:
-        # If no specific errors found, fix the entire code using refine
+        # Check if we have valid API key
+        anthropic_key = os.environ.get('ANTHROPIC_API_KEY')
+        if not anthropic_key:
+            raise ValueError("ANTHROPIC_API_KEY environment variable is not set")
+        
+        # Fix the entire code using refine
         try:
             # Create the LM instance that will be used
-            # thread_lm = dspy.LM("anthropic/claude-3-5-sonnet-latest", api_key=anthropic_key, max_tokens=2500)
-            thread_lm = MODEL_OBJECTS['claude-3-5-sonnet-latest']
+            thread_lm = MODEL_OBJECTS['claude-sonnet-4-5-20250929']
             
             # Define the blocking function to run in thread
             def run_refine_fixer():
@@ -325,93 +309,28 @@ async def fix_code_with_dspy(code: str, error: str, dataset_context: str = ""):
                         error=str(error) or "",
                     )
             
-            # Use asyncio.to_thread for better async integration
-            result = await asyncio.to_thread(run_refine_fixer)
+            # Use asyncio.to_thread for better async integration with timeout
+            result = await asyncio.wait_for(
+                asyncio.to_thread(run_refine_fixer), 
+                timeout=60.0  # 60 second timeout
+            )
+            
+            if not hasattr(result, 'fixed_code'):
+                raise ValueError("DSPy Refine did not return a result with 'fixed_code' attribute")
+            
             return result.fixed_code
             
         except Exception as e:
-            logger.log_message(f"Error during refine code fixing: {str(e)}", level=logging.ERROR)
-            raise e
-    
-    # Start with the original code
-    result_code = code.replace("```python", "").replace("```", "")
-    
-    # Fix each faulty block separately using async refine
-    try:
-        thread_lm = MODEL_OBJECTS['claude-3-5-sonnet-latest']
-        
-        for agent_name, block_code, specific_error in faulty_blocks:
-            try:
-                # Extract inner code between the markers
-                inner_code_match = re.search(r'#\s+\w+\s+code\s+start\s*\n([\s\S]*?)#\s+\w+\s+code\s+end', block_code)
-                if not inner_code_match:
-                    continue
-                    
-                inner_code = inner_code_match.group(1).strip()
-                
-                # Find markers
-                start_marker_match = re.search(r'(#\s+\w+\s+code\s+start)', block_code)
-                end_marker_match = re.search(r'(#\s+\w+\s+code\s+end)', block_code)
-                
-                if not start_marker_match or not end_marker_match:
-                    logger.log_message(f"Could not find start/end markers for {agent_name}", level=logging.WARNING)
-                    continue
-                    
-                start_marker = start_marker_match.group(1)
-                end_marker = end_marker_match.group(1)
-                
-                # Extract the error type and actual error message
-                error_type = ""
-                error_msg = specific_error
-                
-                # Look for common error patterns to provide focused context to the LLM
-                error_type_match = re.search(r'(TypeError|ValueError|AttributeError|IndexError|KeyError|NameError):\s*([^\n]+)', specific_error)
-                if error_type_match:
-                    error_type = error_type_match.group(1)
-                    error_msg = f"{error_type}: {error_type_match.group(2)}"
-                
-                # Add problem location if available
-                if "Problem at this location:" in specific_error:
-                    problem_section = re.search(r'Problem at this location:([\s\S]*?)(?:\n\n|$)', specific_error)
-                    if problem_section:
-                        error_msg = f"{error_msg}\n\nProblem at: {problem_section.group(1).strip()}"
-                
-                # Define the blocking function to run in thread for this specific block
-                def run_block_fixer():
-                    with dspy.context(lm=thread_lm):
-                        return refine_fixer(
-                            dataset_context=str(dataset_context) or "",
-                            faulty_code=str(inner_code) or "",
-                            error=str(error_msg) or "",
-                        )
-                
-                # Use asyncio.to_thread for better async integration
-                result = await asyncio.to_thread(run_block_fixer)
-                
-                # Ensure the fixed code is properly stripped and doesn't include markers
-                fixed_inner_code = result.fixed_code.strip()
-                if fixed_inner_code.startswith('#') and 'code start' in fixed_inner_code:
-                    # If LLM included markers in response, extract only inner code
-                    inner_match = re.search(r'#\s+\w+\s+code\s+start\s*\n([\s\S]*?)#\s+\w+\s+code\s+end', fixed_inner_code)
-                    if inner_match:
-                        fixed_inner_code = inner_match.group(1).strip()
-                
-                # Reconstruct the block with fixed code
-                fixed_block = f"{start_marker}\n\n{fixed_inner_code}\n\n{end_marker}"
-                
-                # Replace the original block with the fixed block in the full code
-                result_code = result_code.replace(block_code, fixed_block)
-                
-            except Exception as e:
-                # Log the error but continue with other blocks
-                logger.log_message(f"Error fixing {agent_name} block: {str(e)}", level=logging.ERROR)
-                continue
-    
+            logger.log_message(f"🔧 DETAILED ERROR in fix_code_with_dspy: {str(e)}", level=logging.ERROR)
+            logger.log_message(f"�� ERROR TYPE: {type(e).__name__}", level=logging.ERROR)
+            logger.log_message(f"�� ERROR TRACEBACK: {traceback.format_exc()}", level=logging.ERROR)
+            
+            # Instead of returning original code, raise the error so we can see what's wrong
+            raise HTTPException(status_code=500, detail=f"Fix failed: {str(e)}")
+            
     except Exception as e:
-        logger.log_message(f"Error during async code fixing: {str(e)}", level=logging.ERROR)
-        raise e
-    
-    return result_code
+        logger.log_message(f"Error in fix_code_with_dspy: {str(e)}", level=logging.ERROR)
+        raise RuntimeError(f"Fix code setup failed: {str(e)}") from e
 
 def get_dataset_context(df):
     """
@@ -455,8 +374,7 @@ def get_dataset_context(df):
         return "Could not generate dataset context information."
 
 def edit_code_with_dspy(original_code: str, user_prompt: str, dataset_context: str = ""):
-    # gemini = dspy.LM("claude-3-5-sonnet-latest", api_key = os.environ['ANTHROPIC_API_KEY'], max_tokens=3000)
-    thread_lm = MODEL_OBJECTS['claude-3-5-sonnet-latest']
+    thread_lm = MODEL_OBJECTS['claude-sonnet-4-5-20250929']
     with dspy.context(lm=thread_lm):
         code_editor = dspy.Predict(code_edit)
         
@@ -518,7 +436,7 @@ async def execute_code(
     session_state = app_state.get_session_state(session_id)
     # logger.log_message(f"Session State: {session_state}", level=logging.INFO)
     
-    if session_state["current_df"] is None:
+    if session_state["datasets"] is None:
         raise HTTPException(
             status_code=400,
             detail="No dataset is currently loaded. Please link a dataset before executing code."
@@ -574,7 +492,7 @@ async def execute_code(
         error_messages = None
         
         try:
-            full_output, json_outputs, matplotlib_outputs = execute_code_from_markdown(code, session_state["current_df"])
+            full_output, json_outputs, matplotlib_outputs = execute_code_from_markdown(code, session_state["datasets"])
             
             # Even with "successful" execution, check for agent failures in the output
             failed_blocks = identify_error_blocks(code, full_output)
@@ -623,6 +541,7 @@ async def execute_code(
                 db.commit()
             else:
                 # Create new record
+                logger.log_message(f"Creating new CodeExecution record for message_id: {message_id}", level=logging.INFO)
                 new_execution = CodeExecution(
                     message_id=message_id,
                     chat_id=chat_id,
@@ -640,6 +559,7 @@ async def execute_code(
                 )
                 db.add(new_execution)
                 db.commit()
+                logger.log_message(f"Successfully created CodeExecution record with ID: {new_execution.execution_id} for message_id: {message_id}", level=logging.INFO)
         except Exception as db_error:
             db.rollback()
             logger.log_message(f"Error saving code execution: {str(db_error)}", level=logging.ERROR)
@@ -692,7 +612,7 @@ async def edit_code(
         session_state = app_state.get_session_state(session_id)
         
         # Get dataset context
-        dataset_context = get_dataset_context(session_state["current_df"])
+        dataset_context = get_dataset_context(session_state["datasets"])
         try:
             # Use the configured language model with dataset context
             edited_code = edit_code_with_dspy(
@@ -735,6 +655,11 @@ async def fix_code(
         Dictionary containing the fixed code and information about fixed blocks
     """
     try:
+        # Add debugging at the start
+        logger.log_message(f"🔧 /fix endpoint called with session_id: {session_id}", level=logging.INFO)
+        logger.log_message(f"🔧 Code length: {len(request_data.code) if request_data.code else 0}", level=logging.INFO)
+        logger.log_message(f"🔧 Error length: {len(request_data.error) if request_data.error else 0}", level=logging.INFO)
+        
         # Check if code and error are provided
         if not request_data.code or not request_data.error:
             logger.log_message(f"Error fixing code: Both code and error message are required {request_data.code} {request_data.error}", level=logging.ERROR)
@@ -744,30 +669,58 @@ async def fix_code(
         app_state = request.app.state
         session_state = app_state.get_session_state(session_id)
         
+        logger.log_message(f"🔧 Session state keys: {list(session_state.keys()) if session_state else 'None'}", level=logging.INFO)
+        
+        # Get the user_id from session state if available (for logging/tracking)
+        user_id = session_state.get("user_id")
+        logger.log_message(f"Code fix request from user_id: {user_id}, session_id: {session_id}", level=logging.INFO)
+        
         # Get dataset context
-        dataset_context = get_dataset_context(session_state["current_df"])
+        logger.log_message(f"🔧 Getting dataset context...", level=logging.INFO)
+        dataset_context = get_dataset_context(session_state["datasets"])
+        logger.log_message(f"🔧 Dataset context length: {len(dataset_context)}", level=logging.INFO)
         
         try:
+            logger.log_message(f"🔧 Calling fix_code_with_dspy...", level=logging.INFO)
             # Use the code_fix agent to fix the code, with dataset context
             fixed_code = await fix_code_with_dspy(
                 request_data.code, 
                 request_data.error,
-                dataset_context
+                dataset_context,
+                session_state["datasets"]  # Pass the actual datasets
             )
             
+            logger.log_message(f"🔧 fix_code_with_dspy returned, formatting...", level=logging.INFO)
             fixed_code = format_code_block(fixed_code)
+            
+            logger.log_message(f"Code fix completed successfully for user_id: {user_id}", level=logging.INFO)
+            logger.log_message(f"🔧 Fixed code length: {len(fixed_code)}", level=logging.INFO)
                 
             return {
                 "fixed_code": fixed_code,
             }
         except Exception as e:
+            logger.log_message(f"🔧 Error in fix_code_with_dspy: {str(e)}", level=logging.ERROR)
             # Fallback if DSPy models are not initialized or there's an error
-            logger.log_message(f"Error with DSPy models: {str(e)}", level=logging.ERROR)
+            logger.log_message(f"Error with DSPy models for user_id {user_id}: {str(e)}", level=logging.ERROR)
             
-            # Return a helpful error message that doesn't expose implementation details
+            # Return the actual error details instead of generic message
+            error_message = str(e)
+            
+            # Sanitize sensitive information but keep useful details
+            if "API key" in error_message.lower():
+                error_message = "API configuration error. Please contact support."
+            elif "timeout" in error_message.lower():
+                error_message = "Request timed out. Please try again."
+            elif "rate limit" in error_message.lower():
+                error_message = "Rate limit exceeded. Please wait a moment and try again."
+            elif len(error_message) > 200:
+                # Truncate very long error messages
+                error_message = error_message[:200] + "..."
+            
             return {
                 "fixed_code": request_data.code,
-                "error": "Could not process fix request. Please try again later."
+                "error": error_message  # Return actual error instead of generic message
             }
     except Exception as e:
         logger.log_message(f"Error fixing code: {str(e)}", level=logging.ERROR)
@@ -833,14 +786,21 @@ async def get_latest_code(
         db = get_session()
         
         try:
-            # Query the database for the latest code execution record
+            # Query the database for the latest code execution record (ordered by created_at desc)
+            logger.log_message(f"Searching for execution records with message_id: {message_id}", level=logging.INFO)
+            
             execution_record = db.query(CodeExecution).filter(
                 CodeExecution.message_id == message_id
-            ).first()
+            ).order_by(CodeExecution.created_at.desc()).first()
             
+            # Also log total count of records for this message_id
+            total_records = db.query(CodeExecution).filter(
+                CodeExecution.message_id == message_id
+            ).count()
+            logger.log_message(f"Found {total_records} execution records for message_id: {message_id}", level=logging.INFO)
             
             if execution_record:
-                logger.log_message(f"Execution record: {execution_record.is_successful} for {message_id}", level=logging.INFO)
+                logger.log_message(f"Latest execution record found - success: {execution_record.is_successful}, latest_code length: {len(execution_record.latest_code or '') if execution_record.latest_code else 0}", level=logging.INFO)
 
                 # Return the latest code and execution status
                 return {

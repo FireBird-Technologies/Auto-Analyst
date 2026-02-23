@@ -1,6 +1,7 @@
 aiofiles==24.1.0
 beautifulsoup4==4.13.4
-dspy==2.6.27
+chardet==5.2.0
+dspy==3.0.3
 litellm==1.75.2
 email_validator==2.2.0
 fastapi==0.115.5
@@ -60,3 +61,4 @@ lightgbm==4.6.0
 arviz==0.21.0
 optuna==4.3.0
 litellm[proxy]
+duckdb==1.3.2

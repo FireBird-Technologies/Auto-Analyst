@@ -3,7 +3,7 @@
 import { type FC, useState, useEffect } from "react"
 import Image from "next/image"
 import { motion } from "framer-motion"
-import { X, MessageSquarePlus, History, Settings, LogOut, Trash2, BarChart2 } from "lucide-react"
+import { X, MessageSquarePlus, History, Settings, LogOut, Trash2, BarChart2, MessageSquare } from "lucide-react"
 import { signOut, useSession } from "next-auth/react"
 import { useRouter } from "next/navigation"
 import { useChatHistoryStore } from "@/lib/store/chatHistoryStore"
@@ -289,13 +289,34 @@ const Sidebar: React.FC<SidebarProps> = ({ isOpen, onClose, onNewChat, chatHisto
             </button>
           </div>
 
-          <button
-            onClick={handleNewChat}
-            className="mx-3 mt-4 mb-2 flex items-center gap-3 rounded-xl bg-white px-4 py-3 text-sm font-medium text-gray-700 shadow-sm hover:shadow-md hover:text-[#FF7F7F] border border-gray-100 hover:border-[#FF7F7F]/20 transition-all duration-200"
-          >
-            <MessageSquarePlus className="w-4 h-4" />
-            <span>New Chat</span>
-          </button>
+          {/* Navigation */}
+          <div className="mx-3 mt-3 mb-2 grid grid-cols-1 gap-2">
+            <button
+              onClick={() => router.push('/chat')}
+              className="flex items-center gap-3 rounded-xl bg-white px-4 py-3 text-sm font-medium text-gray-700 shadow-sm hover:shadow-md hover:text-[#FF7F7F] border border-gray-100 hover:border-[#FF7F7F]/20 transition-all duration-200"
+            >
+              <MessageSquare className="w-4 h-4" />
+              <span>Chat</span>
+            </button>
+            <button
+              onClick={() => router.push('/dashboard')}
+              className="flex items-center gap-3 rounded-xl bg-white px-4 py-3 text-sm font-medium text-gray-700 shadow-sm hover:shadow-md hover:text-[#FF7F7F] border border-gray-100 hover:border-[#FF7F7F]/20 transition-all duration-200"
+            >
+              <BarChart2 className="w-4 h-4" />
+              <span>Dashboard</span>
+            </button>
+          </div>
+
+          {/* New Chat Button */}
+          <div className="mx-3 mb-3">
+            <button
+              onClick={onNewChat}
+              className="w-full flex items-center gap-3 rounded-xl bg-[#FF7F7F] px-4 py-3 text-sm font-medium text-white shadow-sm hover:bg-[#FF6666] transition-all duration-200"
+            >
+              <MessageSquarePlus className="w-4 h-4" />
+              <span>New Chat</span>
+            </button>
+          </div>
 
           {/* Templates Section */}
           <div className="mx-3 mb-3">

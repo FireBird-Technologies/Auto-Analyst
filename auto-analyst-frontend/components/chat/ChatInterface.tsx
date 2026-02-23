@@ -7,7 +7,7 @@ import Image from "next/image"
 import ChatWindow from "./ChatWindow"
 import ChatInput from "./ChatInput"
 import Sidebar from "./Sidebar"
-import axios from "axios"
+import apiClient from '@/lib/api/axiosConfig'
 import { useSession } from "next-auth/react"
 import { useFreeTrialStore } from "@/lib/store/freeTrialStore"
 import FreeTrialOverlay from "./FreeTrialOverlay"
@@ -24,16 +24,7 @@ import CreditBalance from '@/components/chat/CreditBalance'
 import { Avatar } from '@/components/ui/avatar'
 import UserProfilePopup from './UserProfilePopup'
 import SettingsPopup from './SettingsPopup'
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogFooter,
-  DialogDescription
-} from "@/components/ui/dialog"
-import { Button } from "../ui/button" 
-import DatasetResetPopup from './DatasetResetPopup'
+
 import { useModelSettings } from '@/lib/hooks/useModelSettings'
 import logger from '@/lib/utils/logger'
 import { OnboardingTooltip } from '../onboarding/OnboardingTooltips'
@@ -42,6 +33,8 @@ import { useUserSubscriptionStore } from '@/lib/store/userSubscriptionStore'
 import { hasFeatureAccess } from '@/lib/features/feature-access'
 import { toast } from "@/components/ui/use-toast"
 import FeedbackPopup from './FeedbackPopup'
+import { SessionRecovery } from '@/lib/utils/sessionRecovery';
+import axios from 'axios'
 
 interface PlotlyMessage {
   type: "plotly"
@@ -87,7 +80,7 @@ const ChatInterface: React.FC = () => {
   const [agents, setAgents] = useState<AgentInfo[]>([])
   const [showWelcome, setShowWelcome] = useState(true)
   const [abortController, setAbortController] = useState<AbortController | null>(null)
-  const { sessionId } = useSessionStore()
+  const { sessionId, setSessionId, clearSessionId } = useSessionStore()
   const chatInputRef = useRef<{ 
     handlePreviewDefaultDataset: () => void;
     handleSilentDefaultDataset: () => void;
@@ -103,9 +96,7 @@ const ChatInterface: React.FC = () => {
   const [isUserProfileOpen, setIsUserProfileOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const { modelSettings, syncSettingsToBackend } = useModelSettings();
-  const [showDatasetResetConfirm, setShowDatasetResetConfirm] = useState(false);
   const [hasUploadedDataset, setHasUploadedDataset] = useState(false);
-  const [tempChatIdForReset, setTempChatIdForReset] = useState<number | null>(null);
   const [recentlyUploadedDataset, setRecentlyUploadedDataset] = useState(false);
   const datasetPopupShownRef = useRef(false);
   const popupShownForChatIdsRef = useRef<Set<number>>(new Set());
@@ -114,6 +105,10 @@ const ChatInterface: React.FC = () => {
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [showFeedbackPopup, setShowFeedbackPopup] = useState(false);
   const { subscription, fetchSubscription, setSubscription } = useUserSubscriptionStore();
+  const [datasetDescription, setDatasetDescription] = useState<string | null>(null);
+  const [selectedDataset, setSelectedDataset] = useState<{ id: string; name: string; isDefault: boolean; source: 'default'|'upload'|'existing' } | null>(null);
+  const [lastGeneratedForFile, setLastGeneratedForFile] = useState<string | null>(null);
+  const [isGeneratingDescription, setIsGeneratingDescription] = useState(false);
 
   useEffect(() => {
     setMounted(true)
@@ -168,7 +163,7 @@ const ChatInterface: React.FC = () => {
     const fetchAgents = async () => {
       try {
         const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
-        const response = await axios.get(`${API_URL}/agents`)
+        const response = await apiClient.get(`${API_URL}/agents`)
         if (response.data && response.data.available_agents) {
           const agentList: AgentInfo[] = response.data.available_agents.map((name: string) => ({
             name,
@@ -200,7 +195,7 @@ const ChatInterface: React.FC = () => {
     if (session?.user && mounted) {
       const createOrGetUser = async () => {
         try {
-          const response = await axios.post(`${API_URL}/chats/users`, {
+          const response = await apiClient.post(`${API_URL}/chats/users`, {
             username: session.user.name || 'Anonymous User',
             email: session.user.email || `anonymous-${Date.now()}@example.com`
           });
@@ -256,7 +251,7 @@ const ChatInterface: React.FC = () => {
             setIsNewLoginSession(true);
             
             // Reset the session to use the default dataset but preserve model settings
-            await axios.post(`${API_URL}/reset-session`, 
+            await apiClient.post(`${API_URL}/reset-session`, 
               { preserveModelSettings: true }, // Add flag to preserve model settings
               {
                 headers: { 'X-Session-ID': sessionId }
@@ -277,7 +272,7 @@ const ChatInterface: React.FC = () => {
             
             // Force the use of default dataset with an explicit API call, but don't show preview
             try {
-              await axios.get(`${API_URL}/api/default-dataset`, {
+              await apiClient.get(`${API_URL}/api/default-dataset`, {
                 headers: { 'X-Session-ID': sessionId }
               });
               // logger.log("Default dataset loaded silently on login");
@@ -367,7 +362,7 @@ const ChatInterface: React.FC = () => {
           
           // Load chat directly
           setActiveChatId(chatId);
-          const response = await axios.get(`${API_URL}/chats/${chatId}`, {
+          const response = await apiClient.get(`${API_URL}/chats/${chatId}`, {
             params: { user_id: userId },
             headers: { 'X-Session-ID': sessionId }
           });
@@ -396,7 +391,7 @@ const ChatInterface: React.FC = () => {
           localStorage.removeItem('suppressDatasetPopup');
           logger.log("[ChatInterface] Session ID:", sessionId);
           // Check if we need to show dataset selection popup
-          const sessionResponse = await axios.get(`${API_URL}/api/session-info`, {
+          const sessionResponse = await apiClient.get(`${API_URL}/api/session-info`, {
             headers: { 'X-Session-ID': sessionId }
           });
           
@@ -405,8 +400,7 @@ const ChatInterface: React.FC = () => {
             datasetPopupShownRef.current = true;
             popupShownForChatIdsRef.current.add(chatId);
             
-            setTempChatIdForReset(chatId);
-            setShowDatasetResetConfirm(true);
+            // setTempChatIdForReset(chatId); // This line is removed
             return; // Wait for user decision
           }
         }
@@ -416,7 +410,7 @@ const ChatInterface: React.FC = () => {
       
       // Load chat messages
       setActiveChatId(chatId);
-      const response = await axios.get(`${API_URL}/chats/${chatId}`, {
+      const response = await apiClient.get(`${API_URL}/chats/${chatId}`, {
         params: { user_id: userId },
         headers: { 'X-Session-ID': sessionId }
       });
@@ -460,7 +454,7 @@ const ChatInterface: React.FC = () => {
     setIsLoadingHistory(true);
     try {
       // Fetch chat histories for the user or admin
-      const response = await axios.get(`${API_URL}/chats/`, {
+      const response = await apiClient.get(`${API_URL}/chats/`, {
         params: { user_id: currentUserId, is_admin: isAdmin },
         headers: { 'X-Session-ID': sessionId }
       });
@@ -489,7 +483,7 @@ const ChatInterface: React.FC = () => {
     // Cleanup empty chats
     if (session || isAdmin) {
       try {
-        await axios.post(`${API_URL}/chats/cleanup-empty`, {
+        await apiClient.post(`${API_URL}/chats/cleanup-empty`, {
           user_id: userId,
           is_admin: isAdmin
         }, {
@@ -526,7 +520,7 @@ const ChatInterface: React.FC = () => {
     
     // Check for custom dataset
     try {
-      const response = await axios.get(`${API_URL}/api/session-info`, {
+      const response = await apiClient.get(`${API_URL}/api/session-info`, {
         headers: { 'X-Session-ID': sessionId }
       });
       
@@ -536,8 +530,7 @@ const ChatInterface: React.FC = () => {
         datasetPopupShownRef.current = true;
         popupShownForChatIdsRef.current.add(tempId);
         
-        setTempChatIdForReset(tempId);
-        setShowDatasetResetConfirm(true);
+        // setTempChatIdForReset(tempId); // This line is removed
         return;
       }
     } catch (error) {
@@ -565,7 +558,8 @@ const ChatInterface: React.FC = () => {
     message: string, 
     controller: AbortController, 
     currentId: number | null
-  ) => {
+  ): Promise<{ hadError: boolean }> => {
+    let hadError = false
     let accumulatedResponse = ""
     const baseUrl = API_URL
     const endpoint = `${baseUrl}/chat`
@@ -631,7 +625,8 @@ const ChatInterface: React.FC = () => {
           }
           
           if (error) {
-            accumulatedResponse += `\nError: ${error}`
+            hadError = true
+            accumulatedResponse += `\n\n**Sorry, the request could not be completed.**\n\n${error}\n\nPlease try again.`
           } else {
             // Add agent info to content with code blocks
             const codeBlockRegex = /```([a-zA-Z0-9_]+)?\n([\s\S]*?)```/g;
@@ -674,7 +669,7 @@ const ChatInterface: React.FC = () => {
         // More robust save process with retry for the critical first message
         const saveAIResponse = async (retryCount = 0) => {
           try {
-            const response = await axios.post(`${API_URL}/chats/${currentId}/messages`, {
+            const response = await apiClient.post(`${API_URL}/chats/${currentId}/messages`, {
               content: accumulatedResponse.trim(),
               sender: 'ai',
               agent: lastAgentName // Use the tracked agent name
@@ -715,6 +710,8 @@ const ChatInterface: React.FC = () => {
         console.error('Failed to save AI response after retries:', error);
       }
     }
+    
+    return { hadError }
   }
 
   const processAgentMessage = async (
@@ -722,7 +719,8 @@ const ChatInterface: React.FC = () => {
     message: string, 
     controller: AbortController, 
     currentId: number | null
-  ) => {
+  ): Promise<{ hadError: boolean }> => {
+    let hadError = false
     let accumulatedResponse = ""
     const baseUrl = API_URL
     const endpoint = `${baseUrl}/chat/${agentName}`
@@ -796,7 +794,7 @@ const ChatInterface: React.FC = () => {
       if (currentId && (session || isAdmin)) {
         try {
           // logger.log("Saving agent response for chat ID:", currentId);
-          const saveResponse = await axios.post(`${API_URL}/chats/${currentId}/messages`, {
+          const saveResponse = await apiClient.post(`${API_URL}/chats/${currentId}/messages`, {
             content: accumulatedResponse.trim(),
             sender: 'ai',
             agent: agentName
@@ -819,7 +817,7 @@ const ChatInterface: React.FC = () => {
             
             // Update the backend's current message ID
             try {
-              await axios.post(`${API_URL}/set-message-info`, {
+              await apiClient.post(`${API_URL}/set-message-info`, {
                 message_id: aiMessageId,
                 chat_id: currentId
               }, {
@@ -837,13 +835,17 @@ const ChatInterface: React.FC = () => {
         }
       }
     } catch (error) {
+      hadError = true
       console.error(`Error processing agent message (${agentName}):`, error);
       // Add error message
       addMessage({
-        text: `Error with ${agentName} agent: ${error instanceof Error ? error.message : String(error)}`,
-        sender: "ai"
+        text: `**Sorry, the ${agentName} request could not be completed.**\n\n${error instanceof Error ? error.message : String(error)}\n\nPlease try again.`,
+        sender: "ai",
+        agent: agentName
       });
     }
+    
+    return { hadError }
   }
 
   // Then keep the handleSendMessage function as is
@@ -864,7 +866,7 @@ const ChatInterface: React.FC = () => {
       // check the backend or forcibly set the session state to reflect the custom dataset
       try {
         // logger.log("Explicitly forcing recognition of custom dataset");
-        await axios.get(`${API_URL}/api/session-info`, {
+        await apiClient.get(`${API_URL}/api/session-info`, {
           headers: {
             'X-Session-ID': sessionId,
           }
@@ -898,7 +900,7 @@ const ChatInterface: React.FC = () => {
         isFirstMessage = true;
         try {
           // logger.log("Creating new chat on first message with user_id:", userId, "isAdmin:", isAdmin);
-          const response = await axios.post(`${API_URL}/chats/`, { 
+          const response = await apiClient.post(`${API_URL}/chats/`, { 
             user_id: userId,
             is_admin: isAdmin 
           }, { 
@@ -924,7 +926,7 @@ const ChatInterface: React.FC = () => {
       if (currentChatId !== null) {
         // Save user message to the database
         try {
-          await axios.post(`${API_URL}/chats/${currentChatId}/messages`, {
+          await apiClient.post(`${API_URL}/chats/${currentChatId}/messages`, {
             content: message,
             sender: 'user'
           }, {
@@ -1007,9 +1009,12 @@ const ChatInterface: React.FC = () => {
       const agentRegex = /@(\w+)/g
       const matches = [...message.matchAll(agentRegex)]
       
+      // Process the message and track errors
+      let messageResult = { hadError: false }
+      
       // If no agent calls are found, process as a regular message
       if (matches.length === 0) {
-        await processRegularMessage(message, controller, currentChatId)
+        messageResult = await processRegularMessage(message, controller, currentChatId)
       } else {
         // Extract all unique agent names
         const agentNames = [...new Set(matches.map(match => match[1]))]
@@ -1021,7 +1026,7 @@ const ChatInterface: React.FC = () => {
           // Remove the empty agent indicator message
           // Extract the query text by removing the @mentions
           const cleanQuery = message.replace(agentRegex, '').trim()
-          await processAgentMessage(agentName, cleanQuery, controller, currentChatId)
+          messageResult = await processAgentMessage(agentName, cleanQuery, controller, currentChatId)
         } else {
           // Multiple agents case - send a single request with comma-separated agent names
           const combinedAgentName = agentNames.join(",")
@@ -1029,17 +1034,18 @@ const ChatInterface: React.FC = () => {
           // Remove the empty agent indicator message
           // Extract the query text by removing the @mentions
           const cleanQuery = message.replace(agentRegex, '').trim()
-          await processAgentMessage(combinedAgentName, cleanQuery, controller, currentChatId)
+          messageResult = await processAgentMessage(combinedAgentName, cleanQuery, controller, currentChatId)
         }
       }
 
-      // AFTER successful message processing - deduct credits using the correct user ID
-      if (session?.user) {
+      // ONLY deduct credits if there was NO error
+      if (!messageResult.hadError && session?.user) {
+        console.log('[Credits] Processing credit deduction for successful request');
         try {
           // Get the model directly from the API instead of relying on React state
           let modelName;
           try {
-            const settingsResponse = await axios.get(`${API_URL}/api/model-settings`, {
+            const settingsResponse = await apiClient.get(`${API_URL}/api/model-settings`, {
               headers: { 'X-Session-ID': sessionId }
             });
             modelName = settingsResponse.data.model;
@@ -1092,6 +1098,13 @@ const ChatInterface: React.FC = () => {
           console.error('[Credits] Failed to deduct credits:', creditError);
           // Don't block the user experience if credit deduction fails
         }
+      } else if (messageResult.hadError) {
+        console.log('[Credits] Skipping credit deduction due to error');
+        toast({
+          title: "No credits used",
+          description: "Credits were not deducted due to the error.",
+          duration: 3000,
+        })
       }
 
       // After the AI response is generated and saved, update the chat title for new chats
@@ -1099,14 +1112,14 @@ const ChatInterface: React.FC = () => {
       if (isFirstMessage && currentChatId !== null) {
         try {
           // logger.log("Generating title for new chat using query:", message);
-          const titleResponse = await axios.post(`${API_URL}/chat_history_name`, {
+          const titleResponse = await apiClient.post(`${API_URL}/chat_history_name`, {
             query: message
           });
           
           // logger.log("Title response:", titleResponse.data);
           
           if (titleResponse.data && titleResponse.data.name) {
-            await axios.put(`${API_URL}/chats/${currentChatId}`, {
+            await apiClient.put(`${API_URL}/chats/${currentChatId}`, {
               title: titleResponse.data.name
             });
             
@@ -1160,21 +1173,26 @@ const ChatInterface: React.FC = () => {
   }, [addMessage, clearMessages, incrementQueries, session, isAdmin, activeChatId, userId, sessionId, modelSettings, hasEnoughCredits, processRegularMessage, processAgentMessage, fetchChatHistories, checkCredits, recentlyUploadedDataset, chatHistories, syncSettingsToBackend, queriesUsed]);
 
   const handleFileUpload = async (file: File) => {
-    // Feature check for file upload (enterprise feature)
-    if (subscription && !hasFeatureAccess('CUSTOM_INTEGRATIONS', subscription).hasAccess) {
-      toast({
-        title: "Enterprise feature",
-        description: "Custom file uploads require an enterprise subscription.",
-        variant: "destructive",
-        duration: 5000,
-      });
-      return;
-    }
-
     // File validation
     const isCSVByExtension = file.name.toLowerCase().endsWith('.csv');
     const isCSVByType = file.type === 'text/csv' || file.type === 'application/csv';
+    const isExcelByExtension = file.name.toLowerCase().endsWith('.xlsx') || file.name.toLowerCase().endsWith('.xls');
+    const isExcelByType = file.type === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' || 
+                          file.type === 'application/vnd.ms-excel';
     
+    // Only check enterprise restriction for Excel files, not CSV files
+    if (isExcelByExtension || isExcelByType) {
+      if (subscription && !hasFeatureAccess('CUSTOM_INTEGRATIONS', subscription).hasAccess) {
+        toast({
+          title: "Enterprise feature",
+          description: "Excel file uploads require an enterprise subscription. CSV uploads are available for all users.",
+          variant: "destructive",
+          duration: 5000,
+        });
+        return;
+      }
+    }
+
     if (!isCSVByExtension || !isCSVByType) {
       addMessage({
         text: "Error: Please upload a valid CSV file. Other file formats are not supported.",
@@ -1197,7 +1215,6 @@ const ChatInterface: React.FC = () => {
 
     try {
       // Force close any open dataset popup and set short-term suppression
-      setShowDatasetResetConfirm(false);
       localStorage.setItem('suppressDatasetPopup', 'true');
       setTimeout(() => localStorage.removeItem('suppressDatasetPopup'), 5000);
       
@@ -1227,7 +1244,7 @@ const ChatInterface: React.FC = () => {
       
       // Refresh session info to avoid race conditions
       try {
-        await axios.get(`${baseUrl}/api/session-info`, {
+        await apiClient.get(`${baseUrl}/api/session-info`, {
           headers: { 'X-Session-ID': sessionId }
         });
         await new Promise(resolve => setTimeout(resolve, 100));
@@ -1238,7 +1255,7 @@ const ChatInterface: React.FC = () => {
     } catch (error) {
       let errorMessage = "An error occurred while uploading the file.";
       
-      if (axios.isAxiosError(error)) {
+      if (apiClient.isAxiosError(error)) {
         if (error.code === 'ECONNABORTED') {
           errorMessage = "Upload timeout: The request took too long to complete. Please try again with a smaller file.";
         } else if (error.response) {
@@ -1328,7 +1345,7 @@ const ChatInterface: React.FC = () => {
           }
           
           // Check session info for custom dataset
-          const response = await axios.get(`${API_URL}/api/session-info`, {
+          const response = await apiClient.get(`${API_URL}/api/session-info`, {
             headers: { 'X-Session-ID': sessionId }
           });
           
@@ -1351,8 +1368,7 @@ const ChatInterface: React.FC = () => {
               localStorage.setItem('suppressDatasetPopup', 'true');
               setTimeout(() => localStorage.removeItem('suppressDatasetPopup'), 5000);
               
-              setTempChatIdForReset(currentChatId);
-              setShowDatasetResetConfirm(true);
+              // setTempChatIdForReset(currentChatId); // This line is removed
             }
           } else {
             // Using default dataset
@@ -1377,7 +1393,7 @@ const ChatInterface: React.FC = () => {
     try {
       if (shouldReset) {
         // Reset to default dataset
-        await axios.post(`${API_URL}/reset-session`, 
+        await apiClient.post(`${API_URL}/reset-session`, 
           { preserveModelSettings: true },
           { headers: { 'X-Session-ID': sessionId } }
         );
@@ -1396,7 +1412,7 @@ const ChatInterface: React.FC = () => {
       } else {
         // Keep custom dataset
         try {
-          const sessionResponse = await axios.get(`${API_URL}/api/session-info`, {
+          const sessionResponse = await apiClient.get(`${API_URL}/api/session-info`, {
             headers: { 'X-Session-ID': sessionId }
           });
           
@@ -1426,28 +1442,15 @@ const ChatInterface: React.FC = () => {
       }
       
       // Hide the popup and proceed with loading chat
-      setShowDatasetResetConfirm(false);
-      
-      if (tempChatIdForReset) {
-        popupShownForChatIdsRef.current.add(tempChatIdForReset);
-        datasetPopupShownRef.current = true;
-        
-        loadChat(tempChatIdForReset);
-        setTempChatIdForReset(null);
-      }
+      // setTempChatIdForReset(null); // This line is removed
     } catch (error) {
       console.error("Error handling dataset reset:", error);
-      setShowDatasetResetConfirm(false);
-      
-      datasetPopupShownRef.current = true;
-      if (tempChatIdForReset) {
-        popupShownForChatIdsRef.current.add(tempChatIdForReset);
-      }
+      // setTempChatIdForReset(null); // This line is removed
     }
   };
 
   const handleChatDelete = useCallback((chatId: number) => {
-    axios.delete(`${API_URL}/chats/${chatId}`, {
+    apiClient.delete(`${API_URL}/chats/${chatId}`, {
       params: { user_id: userId },
       headers: { 'X-Session-ID': sessionId }
     }).then(() => {
@@ -1485,6 +1488,26 @@ const ChatInterface: React.FC = () => {
     router.push('/account');
     setIsUserProfileOpen(false);
   }, [router, setIsUserProfileOpen]);
+
+  // Add session recovery on component mount
+  useEffect(() => {
+    const recoverSession = () => {
+      const storedSessionId = SessionRecovery.getStoredSessionId();
+      if (storedSessionId && storedSessionId !== sessionId) {
+        console.log(`Recovering session on mount: ${storedSessionId}`);
+        setSessionId(storedSessionId);
+      }
+    };
+    
+    recoverSession();
+  }, []); // Run once on mount
+  
+  // Add session persistence when sessionId changes
+  useEffect(() => {
+    if (sessionId) {
+      SessionRecovery.storeSessionId(sessionId);
+    }
+  }, [sessionId]);
 
   // Don't render anything until mounted to prevent hydration mismatch
   if (!mounted) {
@@ -1547,15 +1570,21 @@ const ChatInterface: React.FC = () => {
 
           {/* Show credit balance and user profile */}
           <div className="flex items-center gap-3">
-            {/* Feedback button */}
-            <button
-              onClick={() => setShowFeedbackPopup(true)}
-              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-sm text-gray-600 hover:text-[#FF7F7F] hover:bg-[#FF7F7F]/5 rounded-lg transition-all duration-200"
-              title="Send Feedback"
-            >
-              <MessageSquare className="w-4 h-4" />
-              <span className="hidden sm:inline">Feedback</span>
-            </button>
+          {/* Feedback button */}
+            <div className="relative">
+              <button
+                onClick={() => setShowFeedbackPopup(true)}
+                className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-sm text-gray-600 hover:text-[#FF7F7F] hover:bg-[#FF7F7F]/5 rounded-lg transition-all duration-200"
+                title="Send Feedback"
+              >
+                <MessageSquare className="w-4 h-4" />
+                <span className="hidden sm:inline">Feedback</span>
+              </button>
+              {/* Small pink strip with 20% off */}
+              <div className="absolute -top-3 -right-1 bg-[#FF7F7F] text-white text-xs px-1.5 py-0.5 rounded-full font-medium">
+                get 20% off
+              </div>
+            </div>
             
             {/* Display current model */}
             {(session || isAdmin) && (
@@ -1611,6 +1640,7 @@ const ChatInterface: React.FC = () => {
             onSendMessage={handleSendMessage}
             showWelcome={showWelcome}
             chatNameGenerated={chatNameGenerated}
+            sessionId={sessionId || undefined}  // Convert null to undefined
             setSidebarOpen={setSidebarOpen}
           />
         </div>
@@ -1649,19 +1679,7 @@ const ChatInterface: React.FC = () => {
         />
 
         {/* Dataset Reset Popup */}
-        {showDatasetResetConfirm && !recentlyUploadedDataset && (
-          <DatasetResetPopup 
-            isOpen={true}
-            onClose={() => {
-              setShowDatasetResetConfirm(false);
-              localStorage.setItem('suppressDatasetPopup', 'true');
-              setTimeout(() => localStorage.removeItem('suppressDatasetPopup'), 3000);
-            }}
-            onConfirm={() => handleDatasetResetConfirm(true)}
-            onCancel={() => handleDatasetResetConfirm(false)}
-            silentOnLogin={isNewLoginSession}
-          />
-        )}
+        {/* This block is removed as per the edit hint */}
       </motion.div>
       
       {/* Onboarding Tooltip */}

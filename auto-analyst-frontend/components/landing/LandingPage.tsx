@@ -33,7 +33,7 @@ export default function LandingPage() {
           onClick={() => router.push('/chat')}
           className="bg-[#FF7F7F] text-white hover:bg-[#FF6666] shadow-md"
         >
-          Go to Chat
+          Try Auto-Analyst
         </Button>
       )
     }
@@ -55,7 +55,7 @@ export default function LandingPage() {
           onClick={() => router.push('/chat')}
           className="bg-[#FF7F7F] text-white hover:bg-[#FF6666] shadow-md"
         >
-          Go to Chat
+         Try Auto-Analyst
         </Button>
       )
     }
@@ -65,24 +65,33 @@ export default function LandingPage() {
         onClick={() => router.push('/login')}
         className="bg-[#FF7F7F] text-white hover:bg-[#FF6666] shadow-md"
       >
-        Sign in
+        Try Auto-Analyst
       </Button>
     )
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-gray-50 to-white">
+    <div className="min-h-screen bg-white">
+      {/* Navigation */}
       <nav className="sticky top-0 left-0 right-0 w-full z-50 bg-white/90 backdrop-blur-sm shadow-sm border-b border-gray-100">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 py-2 flex flex-row justify-between items-center">
           <div className="flex items-center gap-2">
-            <Image
-              src="https://4q2e4qu710mvgubg.public.blob.vercel-storage.com/Auto-analysts%20icon%20small-S682Oi8nbFhOADUHXJSD9d0KtSWKCe.png"
-              alt="Auto-Analyst Logo"
-              width={36}
-              height={36}
-              className="object-contain"
-            />
-            <span className="text-lg font-semibold text-gray-900">Auto-Analyst</span>
+            <Button
+              variant="ghost"
+              onClick={() => router.push('/')}
+              className="text-lg font-semibold text-gray-900 flex items-center gap-2"
+            >
+              <div className="w-8 h-8 relative">
+                <Image
+                  src="https://4q2e4qu710mvgubg.public.blob.vercel-storage.com/Auto-analysts%20icon%20small-S682Oi8nbFhOADUHXJSD9d0KtSWKCe.png"
+                  alt="Auto-Analyst Logo"
+                  fill
+                  className="object-contain"
+                  priority
+                />
+              </div>
+              Auto-Analyst
+            </Button>
           </div>
           <div className="flex flex-row gap-2">
             <Button
@@ -95,20 +104,20 @@ export default function LandingPage() {
           </div>
         </div>
       </nav>
-      
-      <div className="pt-4 sm:pt-0"> {/* Add padding to account for fixed navbar on mobile */}
+
+      {/* Main Content */}
+      <main>
         <HeroSection />
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 py-8">
-          <StatsTicker />
-        </div>
-        <AgentsSection />
-        <WhyAutoAnalystSection />
+        <StatsTicker />
         <FeaturesSection />
+        <AgentsSection />
         <ConnectorsSection />
+        <WhyAutoAnalystSection />
         <MissionSection />
-        <Footer />
-        {!isAdmin && <CookieConsent />}
-      </div>
+      </main>
+
+      <Footer />
+      <CookieConsent />
     </div>
   )
 }

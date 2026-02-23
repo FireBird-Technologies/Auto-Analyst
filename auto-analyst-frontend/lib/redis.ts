@@ -1,6 +1,6 @@
 import { Redis } from '@upstash/redis'
 import logger from '@/lib/utils/logger'
-import { CreditConfig, CREDIT_THRESHOLDS, TrialUtils } from './credits-config'
+import { CreditConfig, CREDIT_THRESHOLDS } from './credits-config'
 // Initialize Redis client with Upstash credentials
 const redis = new Redis({
   url: process.env.UPSTASH_REDIS_REST_URL || '',
@@ -39,13 +39,109 @@ export const KEYS = {
 
 // Credits management utilities with consolidated hash-based storage
 export const creditUtils = {
+  // Check if user's subscription period has ended (for canceled users)
+  async hasSubscriptionPeriodEnded(userId: string): Promise<boolean> {
+    try {
+      const subscriptionHash = await redis.hgetall(KEYS.USER_SUBSCRIPTION(userId))
+      
+      if (!subscriptionHash || !subscriptionHash.renewalDate) {
+        return true // No subscription data means period has ended
+      }
+      
+      const renewalDate = new Date(subscriptionHash.renewalDate as string)
+      const now = new Date()
+      
+      return now > renewalDate
+    } catch (error) {
+      console.error('Error checking subscription period:', error)
+      return true // Default to period ended on error
+    }
+  },
+
+  // Check if user is canceled but still in their paid period
+  async isCanceledButStillPaid(userId: string): Promise<boolean> {
+    try {
+      const subscriptionHash = await redis.hgetall(KEYS.USER_SUBSCRIPTION(userId))
+      
+      if (!subscriptionHash || !subscriptionHash.status) {
+        return false
+      }
+      
+      const status = subscriptionHash.status as string
+      // Simplified: only 'cancel_at_period_end' means canceled but still paid
+      const isCanceledButPaid = status === 'cancel_at_period_end'
+      
+      if (!isCanceledButPaid) {
+        return false
+      }
+      
+      // Double-check if subscription period has ended
+      const periodEnded = await this.hasSubscriptionPeriodEnded(userId)
+      return !periodEnded // Canceled but period hasn't ended yet
+    } catch (error) {
+      console.error('Error checking canceled but paid status:', error)
+      return false
+    }
+  },
+
+  // Check if user should get free credits (canceled and period ended, or truly new user)
+  async shouldGetFreeCredits(userId: string): Promise<boolean> {
+    try {
+      const subscriptionHash = await redis.hgetall(KEYS.USER_SUBSCRIPTION(userId))
+      
+      // If no subscription data, they're a new user
+      if (!subscriptionHash || Object.keys(subscriptionHash).length === 0) {
+        return true
+      }
+      
+      const status = subscriptionHash.status as string
+      
+      // Simplified logic: only 'canceled' users (after period ended) get free credits
+      if (status === 'canceled') {
+        return true
+      }
+      
+      return false // Active, canceling, or other statuses don't get free credits
+    } catch (error) {
+      console.error('Error checking if should get free credits:', error)
+      return false
+    }
+  },
+
+  // Check if user has already received free credits this month
+  async hasReceivedFreeCreditsThisMonth(userId: string): Promise<boolean> {
+    try {
+      const creditsHash = await redis.hgetall(KEYS.USER_CREDITS(userId))
+      
+      if (!creditsHash || !creditsHash.lastFreeCreditsDate) {
+        return false
+      }
+      
+      const lastFreeCreditsDate = new Date(creditsHash.lastFreeCreditsDate as string)
+      const now = new Date()
+      
+      // Check if it's the same month and year
+      return lastFreeCreditsDate.getMonth() === now.getMonth() && 
+             lastFreeCreditsDate.getFullYear() === now.getFullYear()
+    } catch (error) {
+      console.error('Error checking free credits this month:', error)
+      return false
+    }
+  },
+
   // Get remaining credits for a user
   async getRemainingCredits(userId: string): Promise<number> {
     try {
       const creditsHash = await redis.hgetall(KEYS.USER_CREDITS(userId))
       if (!creditsHash || !creditsHash.total || !creditsHash.used) {
-        // No more free credits - users must have 0 credits if no subscription
-        return 20
+        // Check if user should get free credits
+        const shouldGetFree = await this.shouldGetFreeCredits(userId)
+        if (shouldGetFree) {
+          // Check if they already got free credits this month
+          const alreadyReceived = await this.hasReceivedFreeCreditsThisMonth(userId)
+          return alreadyReceived ? 0 : 20 // 20 credits once per month
+        }
+        return 0 // Active subscribers or canceled users still in paid period get 0
       }
       
       const total = parseInt(creditsHash.total as string)
@@ -81,7 +177,7 @@ export const creditUtils = {
   // Initialize credits for a trial user (500 credits)
   async initializeTrialCredits(userId: string, paymentIntentId: string, trialEndDate: string): Promise<void> {
     try {
-      const trialCredits = TrialUtils.getTrialCredits()
+      const trialCredits = 0 // Remove trial functionality
       
       await redis.hset(KEYS.USER_CREDITS(userId), {
         total: trialCredits.toString(),
@@ -370,22 +466,15 @@ export const subscriptionUtils = {
         isPendingDowngrade
       );
       
-      // Special handling for canceled/canceling subscriptions
-      // BUT: Only zero credits if this is a genuine cancellation, not a successful trial conversion
+      // Simplified handling for canceled subscriptions
       if (isCanceled) {
-        // Check if this is a trial that was explicitly canceled vs. a successful conversion
-        const wasCanceledDuringTrial = creditsData && creditsData.trialCanceled === 'true';
-        const wasSubscriptionDeleted = creditsData && creditsData.subscriptionDeleted === 'true';
-        const hasExplicitCancelation = subscriptionData.canceledAt || subscriptionData.subscriptionCanceled === 'true';
-        const isGenuineCancellation = wasCanceledDuringTrial || wasSubscriptionDeleted || hasExplicitCancelation;
-        
-        if (isGenuineCancellation) {
+        // Only users with 'canceled' status (final cancellation) get zero credits
+        if (subscriptionData.status === 'canceled') {
           await creditUtils.setZeroCredits(userId);
-          // console.log(`[Credits] Set zero credits for genuinely canceled user ${userId} (status: ${subscriptionData.status})`);
+          console.log(`[Credits] Set zero credits for canceled user ${userId}`);
           return true;
-        } else {
-          console.log(`[Credits] Skipping credit reset for user ${userId} - appears to be successful trial conversion, not cancellation`);
         }
+        // Users with 'cancel_at_period_end' keep their credits until period ends
       }
       
       // Treat all plans (including Free) similarly for credit refreshes

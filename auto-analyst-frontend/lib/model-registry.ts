@@ -92,7 +92,7 @@ export const MODEL_TIERS = {
       "o1-pro",
       "claude-3-opus-latest",
       "claude-opus-4-20250514",
-      "claude-opus-4-1-20250805",
+      "claude-sonnet-4-5-20250929",
       "gpt-5",
       "gpt-5.2",
       "gemini-3-pro"

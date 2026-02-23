@@ -1,6 +1,7 @@
 import os
 import time
 import logging
+import sys
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -21,28 +22,47 @@ class Logger:
             "%(asctime)s - %(name)s - %(levelname)s - %(message)s" if see_time else "%(message)s,"
         )
 
-        file_handler = logging.FileHandler(f"./logs/{name}.log")
+        # File handler with UTF-8 encoding
+        file_handler = logging.FileHandler(f"./logs/{name}.log", encoding='utf-8')
         file_handler.setFormatter(formatter)
         self.logger.addHandler(file_handler)
 
         if console_log:
-            console_handler = logging.StreamHandler()
+            # Console handler with UTF-8 encoding
+            console_handler = logging.StreamHandler(sys.stdout)
             console_handler.setFormatter(formatter)
+            # Force UTF-8 encoding for console output
+            if hasattr(console_handler.stream, 'reconfigure'):
+                console_handler.stream.reconfigure(encoding='utf-8')
             self.logger.addHandler(console_handler)
 
     def log_message(self, message: str, level: int = logging.INFO):
         if not self.is_dev:
             return
-        if level == logging.INFO:
-            self.logger.info(message)
-        elif level == logging.ERROR:
-            self.logger.error(message)
-        elif level == logging.WARNING:
-            self.logger.warning(message)
-        elif level == logging.DEBUG:
-            self.logger.debug(message)
-        else:
-            self.logger.info(message)
+        try:
+            if level == logging.INFO:
+                self.logger.info(message)
+            elif level == logging.ERROR:
+                self.logger.error(message)
+            elif level == logging.WARNING:
+                self.logger.warning(message)
+            elif level == logging.DEBUG:
+                self.logger.debug(message)
+            else:
+                self.logger.info(message)
+        except UnicodeEncodeError:
+            # Fallback: remove emoji characters if encoding fails
+            safe_message = message.encode('ascii', 'ignore').decode('ascii')
+            if level == logging.INFO:
+                self.logger.info(safe_message)
+            elif level == logging.ERROR:
+                self.logger.error(safe_message)
+            elif level == logging.WARNING:
+                self.logger.warning(safe_message)
+            elif level == logging.DEBUG:
+                self.logger.debug(safe_message)
+            else:
+                self.logger.info(safe_message)
 
     def disable_logging(self):
         self.logger.disabled = True

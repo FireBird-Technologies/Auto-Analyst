@@ -52,11 +52,11 @@ export function useModelSettings() {
     const localSettings = getSettingsFromLocalStorage()
     return {
       provider: localSettings?.provider || process.env.DEFAULT_MODEL_PROVIDER || 'anthropic',
-      model: localSettings?.model || process.env.DEFAULT_PUBLIC_MODEL || 'claude-opus-4-5-20251101',
+      model: localSettings?.model || process.env.DEFAULT_PUBLIC_MODEL || 'claude-sonnet-4-5-20250929',
       hasCustomKey: localSettings?.hasCustomKey || false,
-      apiKey: process.env.NEXT_PUBLIC_OPENAI_API_KEY || '', // Never load API key from localStorage
+      apiKey: process.env.NEXT_PUBLIC_ANTHROPIC_API_KEY || '', // Never load API key from localStorage
       temperature: localSettings?.temperature || process.env.DEFAULT_TEMPERATURE || 1,
-      maxTokens: localSettings?.maxTokens || process.env.PUBLIC_DEFAULT_MAX_TOKENS || 2500
+      maxTokens: localSettings?.maxTokens || process.env.PUBLIC_DEFAULT_MAX_TOKENS || 3000
     }
   })
   
@@ -108,10 +108,10 @@ export function useModelSettings() {
       // Ensure we have complete settings with defaults for any missing values
       const completeSettings = {
         provider: localSettings.provider || 'anthropic',
-        model: localSettings.model || 'claude-opus-4-5-20251101',
+        model: localSettings.model || 'claude-sonnet-4-5-20250929',
         api_key: '', // Never send API key from localStorage
-        temperature: localSettings.temperature || 0.7,
-        max_tokens: localSettings.maxTokens || 6000
+        temperature: localSettings.temperature || 1,
+        max_tokens: 5000 // Always use 3000 for consistency
       }
       const response = await axios.post(`${API_URL}/settings/model`, completeSettings, {
         headers: {
@@ -154,8 +154,8 @@ export function useModelSettings() {
         provider: updatedSettings.provider,
         model: updatedSettings.model,
         api_key: updatedSettings.apiKey,
-        temperature: updatedSettings.temperature,
-        max_tokens: updatedSettings.maxTokens // Note the snake_case for max_tokens
+        temperature: updatedSettings.temperature || 1,
+        max_tokens: updatedSettings.maxTokens || 5000  // Default to 5000 if not specified
       }, {
         headers: {
           'Content-Type': 'application/json',

@@ -2,7 +2,6 @@
 
 import { useState, useEffect } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
-import Head from 'next/head'
 import Link from 'next/link'
 import { Elements } from '@stripe/react-stripe-js'
 import { loadStripe, StripeElementsOptions } from '@stripe/stripe-js'
@@ -34,14 +33,24 @@ export default function CheckoutPage() {
   const [billingCycle, setBillingCycle] = useState<'monthly' | 'yearly'>(initialCycle === 'yearly' ? 'yearly' : 'monthly')
   
   const [clientSecret, setClientSecret] = useState('')
-  const [setupIntentId, setSetupIntentId] = useState('')
-  const [isTrialSetup, setIsTrialSetup] = useState(false)
   const [paymentLoading, setPaymentLoading] = useState(false)
+  const [promoLoading, setPromoLoading] = useState(false) // Add separate loading state for promo codes
   const [paymentError, setPaymentError] = useState('')
   const [promoError, setPromoError] = useState('')
   const [promoCode, setPromoCode] = useState('')
   const [discountApplied, setDiscountApplied] = useState(false)
   const [discountInfo, setDiscountInfo] = useState<{type: string, value: number} | null>(null)
+  const [discountAmount, setDiscountAmount] = useState(0) // Add this state
+  const [promoCodeInfo, setPromoCodeInfo] = useState<{
+    productName: string
+    billingCycle: string
+    discountType: 'percentage' | 'amount'
+    discountValue: number
+    appliesTo: {
+      products: string[]
+      prices: string[]
+    }
+  } | null>(null)
 
   // Plan configurations with both monthly and yearly options
   const pricingTiers = [
@@ -99,7 +108,6 @@ export default function CheckoutPage() {
     
     // Clear existing payment intents to force creation of new ones
     setClientSecret('')
-    setSetupIntentId('')
     setPaymentError('')
     setPromoError('')
     
@@ -115,15 +123,36 @@ export default function CheckoutPage() {
   const createPaymentIntent = async (planData: any, promoCodeValue: string = '') => {
     if (!planData.priceId || !session) return
 
-    setPaymentLoading(true)
+    console.log('🔍 Creating payment intent with plan data:', planData)
+    console.log('🔍 Price ID:', planData.priceId)
+    console.log('🔍 Plan name:', planData.name)
+    console.log('🔍 Interval:', planData.cycle)
+    console.log('🔍 Promo code:', promoCodeValue)
+
+    // Set appropriate loading state
+    if (promoCodeValue) {
+      setPromoLoading(true)
+    } else {
+      setPaymentLoading(true)
+    }
     
     // Clear previous state to avoid stale data
-    setClientSecret('')
-    setSetupIntentId('')
+    if (!promoCodeValue) {
+      setClientSecret('')
+    }
     setPaymentError('')
+    
+    // Always clear promo-related state when creating new payment intent
     if (!promoCodeValue) {
       setPromoError('')
       setDiscountApplied(false)
+      setDiscountAmount(0) // Reset discount amount
+      setDiscountInfo(null)
+    } else {
+      // Clear previous promo state when applying new code
+      setPromoError('')
+      setDiscountApplied(false)
+      setDiscountAmount(0) // Reset discount amount
       setDiscountInfo(null)
     }
 
@@ -136,52 +165,75 @@ export default function CheckoutPage() {
           userId: session.user?.email,
           planName: planData.name,
           interval: planData.cycle,
-          promoCode: promoCodeValue.trim() || undefined,
+          promotionCode: promoCodeValue.trim() || undefined, // Fixed: was promoCode, should be promotionCode
         }),
       })
 
       const data = await response.json()
+      console.log('📡 API Response:', data)
 
-      if (data.message) {
-        if (promoCodeValue) {
-          setPromoError(data.message)
-          setDiscountApplied(false)
-          setDiscountInfo(null)
-        } else {
-          setPaymentError(data.message)
+      // Check for HTTP error status
+      if (!response.ok) {
+        console.error('❌ API Error:', data.error)
+        setPromoError(data.error || 'An error occurred')
+        setDiscountApplied(false)
+        setDiscountAmount(0) // Reset discount amount
+        setDiscountInfo(null)
+        setPromoCodeInfo(null)
+        
+        // Don't set clientSecret or other success states for promo code errors
+        if (!promoCodeValue) {
           setClientSecret('')
-          setSetupIntentId('')
         }
-      } else {
-        // Successfully created new setup intent
-        setClientSecret(data.clientSecret)
-        setSetupIntentId(data.setupIntentId)
-        setIsTrialSetup(data.isTrialSetup || false)
-        setDiscountApplied(data.discountApplied || false)
-        setPaymentError('')
-        setPromoError('')
-        
-        if (data.discountApplied && data.couponId) {
-          fetchCouponDetails(data.couponId, planData.amount)
-        } else {
-          setDiscountInfo(null)
-        }
-        
-        
+        return
       }
+
+      // Success case - setup intent created
+      console.log('✅ Setup intent created:', data.clientSecret)
+      setClientSecret(data.clientSecret)
+      setPaymentError('')
+      
+      // Handle promo code success
+      if (data.discountAmount > 0 && data.promoCodeInfo) {
+        setDiscountApplied(true)
+        setPromoError('')
+        setDiscountAmount(data.discountAmount) // Store the actual discount amount
+        setDiscountInfo({
+          type: data.promoCodeInfo.discountType,
+          value: data.promoCodeInfo.discountValue
+        })
+        setPromoCodeInfo(data.promoCodeInfo)
+      } else {
+        // No promo code or no discount
+        setDiscountApplied(false)
+        setPromoError('')
+        setDiscountAmount(0) // Reset discount amount
+        setDiscountInfo(null)
+        setPromoCodeInfo(null)
+      }
+      
+      setPaymentError('')
+
     } catch (err) {
-      console.error('Error creating payment intent:', err)
+      console.error('❌ Error creating payment intent:', err)
+      
+      // Set appropriate error state based on whether this was a promo code validation
       if (promoCodeValue) {
         setPromoError('Failed to validate promo code. Please try again.')
         setDiscountApplied(false)
+        setDiscountAmount(0) // Reset discount amount
         setDiscountInfo(null)
       } else {
         setPaymentError('Failed to set up payment. Please try again.')
         setClientSecret('')
-        setSetupIntentId('')
       }
     } finally {
-      setPaymentLoading(false)
+      // Clear appropriate loading state
+      if (promoCodeValue) {
+        setPromoLoading(false)
+      } else {
+        setPaymentLoading(false)
+      }
     }
   }
 
@@ -204,9 +256,16 @@ export default function CheckoutPage() {
   // Handle promo code changes
   const handlePromoCodeChange = (newPromoCode: string) => {
     if (newPromoCode.trim() && planDetails.priceId) {
+      // Clear previous discount state before validation
+      setDiscountApplied(false)
+      setDiscountAmount(0) // Reset discount amount
+      setDiscountInfo(null)
+      setPromoError('')
+      
       createPaymentIntent(planDetails, newPromoCode)
     } else if (!newPromoCode.trim() && clientSecret) {
       setDiscountApplied(false)
+      setDiscountAmount(0) // Reset discount amount
       setDiscountInfo(null)
       setPromoError('')
       createPaymentIntent(planDetails, '')
@@ -290,10 +349,6 @@ export default function CheckoutPage() {
   
   return (
     <>
-      <Head>
-        <title>Checkout | Auto-Analyst</title>
-      </Head>
-      
       <div className="min-h-screen bg-gray-50 py-16 px-4 sm:px-6 lg:px-8">
         <div className="max-w-5xl mx-auto">
           <div className="flex items-center justify-between mb-10">
@@ -403,14 +458,14 @@ export default function CheckoutPage() {
                       amount={planDetails.amount}
                       interval={planDetails.cycle as 'month' | 'year' | 'day'}
                       clientSecret={clientSecret}
-                      isTrialSetup={isTrialSetup}
-                      setupIntentId={setupIntentId}
+                      priceId={planDetails.priceId}
+                      promoCodeInfo={promoCodeInfo} // Add this
                     />
                     
                     {/* Debug info - remove in production */}
-                    {process.env.NODE_ENV === 'development' && setupIntentId && (
+                    {process.env.NODE_ENV === 'development' && clientSecret && (
                       <div className="mt-2 p-2 bg-gray-100 rounded text-xs text-gray-600">
-                        <strong>Debug:</strong> Setup Intent: {setupIntentId.substring(0, 20)}...
+                        <strong>Debug:</strong> Setup Intent: {clientSecret.split('_secret_')[0]}...
                         <br />
                         <strong>Plan:</strong> {planDetails.name} {planDetails.cycle} (${planDetails.amount})
                       </div>
@@ -447,10 +502,10 @@ export default function CheckoutPage() {
                             handlePromoCodeChange(promoCode.trim())
                           }
                         }}
-                        disabled={!promoCode.trim() || paymentLoading}
+                        disabled={!promoCode.trim() || promoLoading}
                         className="h-12 px-8 bg-[#FF7F7F] hover:bg-[#FF6666] text-white rounded-md transition-all disabled:opacity-50 disabled:cursor-not-allowed font-medium whitespace-nowrap w-full sm:w-auto"
                       >
-                        Apply
+                        {promoLoading ? 'Validating...' : 'Apply'}
                       </button>
                     ) : (
                       <button
@@ -459,21 +514,39 @@ export default function CheckoutPage() {
                           setPromoCode('')
                           handlePromoCodeChange('')
                         }}
-                        disabled={paymentLoading}
+                        disabled={promoLoading}
                         className="h-12 px-8 bg-gray-500 hover:bg-gray-600 text-white rounded-md transition-all disabled:opacity-50 disabled:cursor-not-allowed font-medium whitespace-nowrap w-full sm:w-auto"
                       >
                         Clear
                       </button>
                     )}
                   </div>
+                  
+                  {/* Promo Code Validation Messages */}
                   {promoError && (
-                    <div className="mt-3 p-3 bg-red-50 border border-red-200 rounded-md">
-                      <p className="text-sm text-red-600 text-center sm:text-left">{promoError}</p>
-                    </div>
+                    <p className="text-sm text-red-600 mt-2">{promoError}</p>
                   )}
-                  {discountApplied && (
-                    <div className="mt-3 p-3 bg-green-50 border border-green-200 rounded-md">
-                      <p className="text-sm text-green-600 text-center sm:text-left">✓ Promo code applied!</p>
+                  
+                  {/* Promo Code Success Message */}
+                  {promoCodeInfo && !promoError && (
+                    <div className="bg-green-50 border border-green-200 rounded-md p-3 mt-3">
+                      <div className="flex items-start">
+                        <CheckCircle className="h-5 w-5 text-green-400 mt-0.5 mr-2 flex-shrink-0" />
+                        <div className="text-sm">
+                          <p className="font-medium text-green-800">
+                            Promo code applied successfully!
+                          </p>
+                          <p className="text-green-700 mt-1">
+                            This promo code applies to: <strong>{promoCodeInfo.productName}</strong> ({promoCodeInfo.billingCycle === 'month' ? 'monthly' : promoCodeInfo.billingCycle === 'year' ? 'yearly' : promoCodeInfo.billingCycle} billing)
+                          </p>
+                          <p className="text-green-700">
+                            Discount: {promoCodeInfo.discountType === 'percentage' 
+                              ? `${(promoCodeInfo.discountValue * 100)}% off` 
+                              : `$${promoCodeInfo.discountValue} off`
+                            }
+                          </p>
+                        </div>
+                      </div>
                     </div>
                   )}
                 </div>
@@ -491,8 +564,8 @@ export default function CheckoutPage() {
                       </span>
                     </div>
                     
-                    {/* Show yearly savings */}
-                    {billingCycle === 'yearly' && planDetails.name === 'Standard' && (
+                    {/* Show yearly savings - only if no promo code is applied or promo code is invalid */}
+                    {billingCycle === 'yearly' && planDetails.name === 'Standard' && !discountApplied && (
                       <div className="flex justify-between mb-2">
                         <span className="text-green-700 font-medium text-sm">
                           Yearly Discount (30% off)
@@ -503,16 +576,26 @@ export default function CheckoutPage() {
                       </div>
                     )}
                     
-                    {discountApplied && discountInfo && (
+                    {/* Show promo discount - only if backend confirms it's valid */}
+                    {discountApplied && discountInfo && !promoError && (
                       <div className="flex justify-between mb-2">
                         <span className="text-green-700 font-medium">
-                          Promo Discount ({discountInfo.type === 'percent' ? `${discountInfo.value}% off` : `$${discountInfo.value} off`})
+                          Promo Discount ({discountInfo.type === 'percentage' ? `${(discountInfo.value * 100)}% off` : `$${discountInfo.value} off`})
                         </span>
                         <span className="text-green-700 font-medium">
-                          {discountInfo.type === 'percent' 
-                            ? `-$${((planDetails.amount * discountInfo.value) / 100).toFixed(2)}`
-                            : `-$${discountInfo.value.toFixed(2)}`
-                          }
+                          -${(discountAmount / 100).toFixed(2)} {/* Use discountAmount directly */}
+                        </span>
+                      </div>
+                    )}
+                    
+                    {/* Show promo code error if validation failed */}
+                    {promoError && (
+                      <div className="flex justify-between mb-2">
+                        <span className="text-red-600 font-medium text-sm">
+                          Promo Code Error
+                        </span>
+                        <span className="text-red-600 font-medium text-sm">
+                          {promoError}
                         </span>
                       </div>
                     )}
@@ -528,9 +611,10 @@ export default function CheckoutPage() {
                       )}
                     </div>
                     
-                    {(discountApplied || billingCycle === 'yearly') && (
+                    {/* Success messages - only show valid discounts */}
+                    {(discountApplied || (billingCycle === 'yearly' && !discountApplied)) && (
                       <div className="mt-2 p-2 bg-green-50 border border-green-200 rounded-md">
-                        {discountApplied && (
+                        {discountApplied && !promoError && (
                           <p className="text-sm text-green-700 font-medium">✓ Promo code applied!</p>
                         )}
                         {billingCycle === 'yearly' && !discountApplied && (
@@ -544,47 +628,37 @@ export default function CheckoutPage() {
                     <div className="flex justify-between font-medium text-gray-900">
                       <span>Total (USD)</span>
                       <span>
-                        {(discountApplied && discountInfo) || billingCycle === 'yearly' ? (
-                          <div className="text-right">
-                            <div className="text-lg font-bold text-green-600">
-                              ${(() => {
-                                let total = planDetails.amount
-                                
-                                // Apply promo discount if any
-                                if (discountApplied && discountInfo) {
-                                  if (discountInfo.type === 'percent') {
-                                    total = total - (total * discountInfo.value) / 100
-                                  } else {
-                                    total = Math.max(0, total - discountInfo.value)
-                                  }
-                                }
-                                
-                                return total.toFixed(2)
-                              })()}
-                            </div>
-                            <div className="text-xs text-gray-500">
-                              {billingCycle === 'yearly' && planDetails.name === 'Standard' && !discountApplied && (
-                                'You save $54.00 with yearly billing!'
-                              )}
-                              {discountApplied && discountInfo && (
-                                `You save $${
-                              discountInfo.type === 'percent' 
-                                ? ((planDetails.amount * discountInfo.value) / 100).toFixed(2)
-                                : discountInfo.value.toFixed(2)
-                                } with promo code!`
-                              )}
-                              {billingCycle === 'yearly' && planDetails.name === 'Standard' && discountApplied && discountInfo && (
-                                `Total savings: $${(54 + (
-                                  discountInfo.type === 'percent' 
-                                    ? (planDetails.amount * discountInfo.value) / 100
-                                    : discountInfo.value
-                                )).toFixed(2)}!`
-                              )}
-                            </div>
-                          </div>
-                        ) : (
-                          `$${planDetails.amount}`
-                        )}
+                        {(() => {
+                          if (discountApplied && discountAmount > 0 && !promoError) {
+                            const total = (planDetails.amount * 100 - discountAmount) / 100
+                            return (
+                              <div className="text-right">
+                                <div className="text-lg font-bold text-green-600">
+                                  {total.toFixed(2)}
+                                </div>
+                                <div className="text-xs text-gray-500">
+                                  {`You save $${(discountAmount / 100).toFixed(2)} with promo code!`}
+                                  {billingCycle === 'yearly' && planDetails.name === 'Standard' && (
+                                    ` Total savings: $${(54 + (discountAmount / 100)).toFixed(2)}!`
+                                  )}
+                                </div>
+                              </div>
+                            )
+                          } else {
+                            return (
+                              <div className="text-right">
+                                <div className="text-lg font-bold text-green-600">
+                                  {planDetails.amount.toFixed(2)}
+                                </div>
+                                {billingCycle === 'yearly' && planDetails.name === 'Standard' && !discountApplied && (
+                                  <div className="text-xs text-gray-500">
+                                    You save $54.00 with yearly billing!
+                                  </div>
+                                )}
+                              </div>
+                            )
+                          }
+                        })()}
                       </span>
                     </div>
                   </div>
